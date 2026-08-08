@@ -12,6 +12,8 @@ import { StockCard } from "./StockCard";
 import { calculatePortfolioDistribution } from "../utils/portfolio";
 import { DEFAULT_SELECTION_PARAMS, SelectionParameters } from "../services/universeSelector";
 import { KnowledgeBaseDrawer } from "./KnowledgeBaseDrawer";
+import { saveAnalyzedStocks, getHistoricalIndications } from "../lib/supabase";
+import { verifyOpenOperations } from "../services/operationsManager";
 
 export function Dashboard() {
   const [loading, setLoading] = useState(false);
@@ -36,6 +38,19 @@ export function Dashboard() {
 
   // Controle do Drawer da Base de Conhecimento
   const [isKnowledgeDrawerOpen, setIsKnowledgeDrawerOpen] = useState(false);
+  const [isVerifyingOps, setIsVerifyingOps] = useState(false);
+
+  const handleVerifyOps = async () => {
+    setIsVerifyingOps(true);
+    try {
+      const res = await verifyOpenOperations();
+      alert(`Verificação concluída: ${res.updated} indicações atualizadas de um total de ${res.total} abertas. (Erros: ${res.errors})`);
+    } catch (err: any) {
+      alert("Erro ao verificar indicações: " + err.message);
+    } finally {
+      setIsVerifyingOps(false);
+    }
+  };
 
   // Status de Progresso do Pipeline em Tempo Real
   const [currentStep, setCurrentStep] = useState<number>(0);
@@ -86,10 +101,14 @@ export function Dashboard() {
       const riskStr = deepAnalysis ? "Agressivo (Bottom Fishing Profundo)" : "Moderado (Value Investing)";
       const execDate = isBacktestMode ? new Date(backtestDate) : new Date();
 
+      const candidateTickers = candidates.map(c => c.ticker);
+      const historicalIndications = await getHistoricalIndications(candidateTickers);
+
       const result = await analyzeMarket(
         investmentAmount,
         riskStr,
         candidates,
+        historicalIndications,
         recommendationCount,
         targetPeriodValue,
         targetPeriodUnit,
@@ -104,6 +123,23 @@ export function Dashboard() {
         apiFetches: candidatesResult.syncStats.apiFetchCount,
         executionTimeMs: Math.round(endTime - startTime)
       });
+
+      // Generate ID for each analyzed stock to link operations precisely
+      if (result && result.ranked_stocks) {
+        const now = new Date();
+        const dateStr = now.toISOString().replace(/[:.]/g, '-');
+        result.ranked_stocks = result.ranked_stocks.map(stock => {
+          const tck = (stock.ticker || 'B3').toUpperCase();
+          return {
+            ...stock,
+            id: `${tck}_${dateStr}`
+          };
+        });
+
+        saveAnalyzedStocks(result.ranked_stocks).catch(err => {
+          console.error("Failed to save analyzed stocks:", err);
+        });
+      }
 
       setData(result);
     } catch (err: any) {
@@ -226,6 +262,17 @@ export function Dashboard() {
           </div>
           
           <div className="flex flex-wrap items-center gap-2.5">
+            {/* Verificar Indicações */}
+            <button 
+              onClick={handleVerifyOps}
+              disabled={isVerifyingOps}
+              className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-blue-400 bg-blue-400/10 border border-blue-400/20 hover:bg-blue-400/20 transition-colors disabled:opacity-50"
+            >
+              {isVerifyingOps ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+              Verificar Indicações
+            </button>
+            
+            {/* Grupo 1: Busca e configurações */}
             {/* Specific Ticker */}
             <div className="relative hidden lg:block">
               <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#8E9299]" />
@@ -275,75 +322,72 @@ export function Dashboard() {
               <span className="absolute -top-4 left-1 text-[8px] uppercase tracking-widest whitespace-nowrap text-[#8E9299]">Tempo Alvo</span>
             </div>
 
-            {/* Base de Conhecimento Button */}
-            <button
-              onClick={() => setIsKnowledgeDrawerOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-[#151619] text-purple-300 border border-purple-500/30 hover:border-purple-500/60 transition-all cursor-pointer shadow-sm hover:shadow-purple-500/10"
-              title="Acessar Memória Estratégica da Base de Conhecimento"
-            >
-              <BookOpen className="w-3.5 h-3.5 text-purple-400" />
-              <span>Base de Conhecimento</span>
-            </button>
+            {/* Separador visual */}
+            <div className="hidden md:block w-px h-5 bg-[#2a2b2f]" />
 
-            {/* Parâmetros de Seleção Toggle */}
-            <button
-              onClick={() => setIsKnowledgeDrawerOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all bg-[#151619] text-purple-400 border border-purple-500/30 hover:bg-purple-500/10 hover:border-purple-500/60 cursor-pointer shadow-sm shadow-purple-500/5"
-              title="Acessar Base de Conhecimento Evolutiva & Insights Validados no Supabase"
-            >
-              <BookOpen className="w-3.5 h-3.5 text-purple-400" />
-              <span>Base de Conhecimento</span>
-            </button>
+            {/* Grupo 2: Modos especiais agrupados — M07 */}
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded-full border border-[#2a2b2f] bg-[#0d0d0f]">
+              {/* Base de Conhecimento — M01: apenas um botão (duplicata removida) */}
+              <button
+                onClick={() => setIsKnowledgeDrawerOpen(true)}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-purple-300 hover:bg-purple-500/10 transition-all cursor-pointer"
+                title="Acessar Memória Estratégica da Base de Conhecimento"
+              >
+                <BookOpen className="w-3.5 h-3.5 text-purple-400" />
+                <span className="hidden lg:inline">Base de Conhecimento</span>
+              </button>
 
-            <button
-              onClick={() => setShowFilters(!showFilters)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
-                showFilters 
-                  ? "bg-blue-600 text-white shadow-md shadow-blue-500/20 font-bold" 
-                  : "bg-[#151619] text-[#8E9299] border border-[#2a2b2f] hover:border-blue-500/50"
-              }`}
-              title="Ajustar pesos e critérios da Seleção Inteligente"
-            >
-              <SlidersHorizontal className="w-3.5 h-3.5" />
-              Critérios
-            </button>
+              <button
+                onClick={() => setShowFilters(!showFilters)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all ${
+                  showFilters 
+                    ? "bg-blue-600 text-white font-bold" 
+                    : "text-[#8E9299] hover:text-white hover:bg-[#1e1f23]"
+                }`}
+                title="Ajustar pesos e critérios da Seleção Inteligente"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+                <span className="hidden lg:inline">Critérios</span>
+              </button>
 
-            <button
-              onClick={() => setIsSimulationEnabled(!isSimulationEnabled)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
-                isSimulationEnabled 
-                  ? "bg-emerald-500 text-black shadow-md shadow-emerald-500/20 font-bold" 
-                  : "bg-[#151619] text-[#8E9299] border border-[#2a2b2f] hover:border-emerald-500/50"
-              }`}
-            >
-              <Calculator className="w-3.5 h-3.5" />
-              Simulador
-            </button>
+              <button
+                onClick={() => setIsSimulationEnabled(!isSimulationEnabled)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all ${
+                  isSimulationEnabled 
+                    ? "bg-emerald-500 text-black font-bold" 
+                    : "text-[#8E9299] hover:text-white hover:bg-[#1e1f23]"
+                }`}
+              >
+                <Calculator className="w-3.5 h-3.5" />
+                <span className="hidden lg:inline">Simulador</span>
+              </button>
 
-            <button
-              onClick={() => setIsBacktestMode(!isBacktestMode)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
-                isBacktestMode 
-                  ? "bg-amber-500 text-black shadow-md shadow-amber-500/20 font-bold" 
-                  : "bg-[#151619] text-[#8E9299] border border-[#2a2b2f] hover:border-amber-500/50"
-              }`}
-            >
-              <History className="w-3.5 h-3.5" />
-              Backteste
-            </button>
+              <button
+                onClick={() => setIsBacktestMode(!isBacktestMode)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all ${
+                  isBacktestMode 
+                    ? "bg-amber-500 text-black font-bold" 
+                    : "text-[#8E9299] hover:text-white hover:bg-[#1e1f23]"
+                }`}
+              >
+                <History className="w-3.5 h-3.5" />
+                <span className="hidden lg:inline">Backteste</span>
+              </button>
 
-            <button
-              onClick={() => setDeepAnalysis(!deepAnalysis)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
-                deepAnalysis 
-                  ? "bg-purple-600 text-white shadow-md shadow-purple-500/20 font-bold" 
-                  : "bg-[#151619] text-[#8E9299] border border-[#2a2b2f] hover:border-purple-500/50"
-              }`}
-            >
-              <BrainCircuit className="w-3.5 h-3.5" />
-              Deep IA
-            </button>
+              <button
+                onClick={() => setDeepAnalysis(!deepAnalysis)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all ${
+                  deepAnalysis 
+                    ? "bg-purple-600 text-white font-bold" 
+                    : "text-[#8E9299] hover:text-white hover:bg-[#1e1f23]"
+                }`}
+              >
+                <BrainCircuit className="w-3.5 h-3.5" />
+                <span className="hidden lg:inline">Deep IA</span>
+              </button>
+            </div>
 
+            {/* Grupo 3: Ação principal */}
             <button 
               onClick={handleAnalyze}
               disabled={loading}
@@ -650,76 +694,6 @@ export function Dashboard() {
             className="space-y-8"
             ref={reportRef}
           >
-            {/* Pipeline Stats Banner */}
-            {pipelineStats && (
-              <div className="p-4 rounded-xl border bg-[#111215] border-[#2a2b2f] flex flex-wrap items-center justify-between gap-4 text-xs">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20">
-                    <Database className="w-4 h-4 text-emerald-400" />
-                  </div>
-                  <div>
-                    <span className="font-bold text-white block">Pipeline Inteligente Concluído</span>
-                    <span className="text-[#8E9299] text-[10px]">Base Consolidada & Memória Estratégica Consultada</span>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-4 sm:gap-6 font-mono">
-                  <div>
-                    <span className="text-[10px] text-[#8E9299] block uppercase">Universo Avaliado</span>
-                    <span className="font-bold text-white">{pipelineStats.universeCount} ativos</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-[#8E9299] block uppercase">Pool Selecionado</span>
-                    <span className="font-bold text-emerald-400">{pipelineStats.poolSize} ativos</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-[#8E9299] block uppercase">Supabase Cache HITs</span>
-                    <span className="font-bold text-blue-400">{pipelineStats.cacheHits} (0 chamadas)</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-[#8E9299] block uppercase">Usebolsa Downloads</span>
-                    <span className="font-bold text-amber-400">{pipelineStats.apiFetches} chamadas</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-[#8E9299] block uppercase">Tempo Total</span>
-                    <span className="font-bold text-purple-400">{pipelineStats.executionTimeMs}ms</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Memória Estratégica Aplicada Card */}
-            {data.knowledge_base?.applied_items && data.knowledge_base.applied_items.length > 0 && (
-              <div className="p-4 rounded-xl border bg-[#111216] border-purple-500/20 text-xs space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-purple-300 font-bold">
-                    <BookOpen className="w-4 h-4 text-purple-400" />
-                    <span>Memória Estratégica Aplicada pela IA ({data.knowledge_base.applied_items.length} padrões consultados)</span>
-                  </div>
-
-                  <button
-                    onClick={() => setIsKnowledgeDrawerOpen(true)}
-                    className="text-[10px] text-purple-400 hover:text-purple-300 font-semibold underline cursor-pointer"
-                  >
-                    Gerenciar Base de Conhecimento
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                  {data.knowledge_base.applied_items.slice(0, 4).map(item => (
-                    <div key={item.id} className="p-2.5 rounded-lg bg-[#0c0d10] border border-[#222328] space-y-1">
-                      <div className="flex items-center justify-between text-[10px]">
-                        <span className="text-emerald-400 font-semibold">{item.category.replace('_', ' ')}</span>
-                        <span className="text-purple-300 font-mono font-bold">{item.confidence_score}% confiança</span>
-                      </div>
-                      <p className="text-gray-300 text-[11px] leading-tight">
-                        "{item.summary}"
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
 
             {/* AI Recommendation Summary */}
             {isSimulationEnabled && data.ai_recommendation && simulationResult && (
@@ -858,7 +832,7 @@ export function Dashboard() {
               </motion.div>
             )}
 
-            {/* Ranked Stocks */}
+            {/* M03 — Ranked Stocks primeiro: informação mais valiosa aparece imediatamente */}
             <section>
               <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
                 <div>
@@ -920,6 +894,65 @@ export function Dashboard() {
                 ))}
               </div>
             </section>
+
+            {/* M03/M04 — Pipeline Stats e Memória Estratégica movidos para baixo do ranking */}
+            <div className="border-t border-[#1a1b1f] pt-6 space-y-4">
+              {/* M04 — Pipeline Stats condensado em uma linha de metadados */}
+              {pipelineStats && (
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-mono text-[#8E9299]">
+                  <div className="flex items-center gap-1.5">
+                    <Database className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-emerald-400 font-semibold">Pipeline concluído</span>
+                  </div>
+                  <span>·</span>
+                  <span>{pipelineStats.universeCount} ativos avaliados</span>
+                  <span>·</span>
+                  <span className="text-emerald-400">{pipelineStats.poolSize} selecionados</span>
+                  <span>·</span>
+                  <span className="text-purple-400">{pipelineStats.executionTimeMs}ms</span>
+                  {pipelineStats.apiFetches > 0 && (
+                    <>
+                      <span>·</span>
+                      <span className="text-amber-400">{pipelineStats.apiFetches} downloads</span>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Memória Estratégica Aplicada — após o ranking */}
+              {data.knowledge_base?.applied_items && data.knowledge_base.applied_items.length > 0 && (
+                <div className="p-4 rounded-xl border bg-[#111216] border-purple-500/20 text-xs space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-purple-300 font-bold">
+                      <BookOpen className="w-4 h-4 text-purple-400" />
+                      <span>Memória Estratégica Aplicada pela IA ({data.knowledge_base.applied_items.length} padrões consultados)</span>
+                    </div>
+
+                    <button
+                      onClick={() => setIsKnowledgeDrawerOpen(true)}
+                      className="text-[10px] text-purple-400 hover:text-purple-300 font-semibold underline cursor-pointer"
+                    >
+                      Gerenciar Base de Conhecimento
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                    {data.knowledge_base.applied_items.slice(0, 4).map(item => (
+                      <div key={item.id} className="p-2.5 rounded-lg bg-[#0c0d10] border border-[#222328] space-y-1">
+                        <div className="flex items-center justify-between text-[10px]">
+                          <span className="text-emerald-400 font-semibold">{item.category.replace('_', ' ')}</span>
+                          <span className="text-purple-300 font-mono font-bold">{item.confidence_score}% confiança</span>
+                        </div>
+                        <p className="text-gray-300 text-[11px] leading-tight">
+                          "{item.summary}"
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
           </motion.div>
           );
         })()}

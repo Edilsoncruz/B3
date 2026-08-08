@@ -21,8 +21,11 @@ if (apiKey) {
 
 // Interface que o StockCard e Dashboard esperam
 export interface StockAnalysis {
+  id?: string;
   ticker: string;
   company_name: string;
+  sector?: string;
+  group?: string;
   current_price: number;
   entry_price: number;
   drop_percentage: number;
@@ -99,6 +102,7 @@ export async function analyzeMarket(
   budget: number,
   riskProfile: string,
   rawData: StockCache[],
+  historicalIndications: Record<string, any[]>,
   recommendationCount: number = 5,
   targetPeriodValue: number = 2,
   targetPeriodUnit: string = 'meses',
@@ -148,6 +152,8 @@ REQUISITOS OBRIGATÓRIOS PARA CADA RECOMENDAÇÃO:
 9. estimated_target_date & estimated_timeframe: Tempo estimado calculado a partir de hoje (${targetWindow.baseDateFormatted}) para o alvo, ex: '${targetWindow.targetPeriodDescription}'.
 10. smart_money_signals: Lista com 2 a 4 gatilhos de fluxo institucional (ex: 'Acumulação em suporte histórico', 'Divergência de volume em fundo').
 11. analysis & reason: Justificativa técnica e fundamentalista concisa da recomendação.
+12. sector: Nome do setor macro da empresa na B3 (ex: 'Materiais Básicos', 'Financeiro').
+13. group: Nome do subsetor ou grupo (ex: 'Papel e Celulose', 'Bancos').
 ${knowledgeContext}
 
 Responda SOMENTE com o JSON no formato especificado contendo exatamente ${recommendationCount} ativos em 'ranked_stocks'.`;
@@ -157,29 +163,36 @@ Responda SOMENTE com o JSON no formato especificado contendo exatamente ${recomm
   let dataContext = '';
 
   if (hasData) {
-    dataContext = `\n\nDADOS REAIS DO MERCADO COLETADOS NO SUPABASE (${rawData.length} AÇÕES ANALISADAS):\n${JSON.stringify(rawData.map(s => ({
-      ticker: s.ticker,
-      current_price: s.current_price,
-      // Campos críticos para cálculo de suporte, stop e alvo:
-      week_52_low: s.fundamentals?.week_52_low,
-      week_52_high: s.fundamentals?.week_52_high,
-      daily_change_pct: s.fundamentals?.daily_change_pct,
-      ytd_return_pct: s.fundamentals?.ytd_return_pct,
-      avg_volume_52w: s.fundamentals?.avg_volume_52w,
-      // Fundamentos
-      pl: s.fundamentals?.pl,
-      pvp: s.fundamentals?.pvp,
-      roe: s.fundamentals?.roe,
-      dividend_yield: s.fundamentals?.dividend_yield,
-      net_margin: s.fundamentals?.net_margin,
-      debt_equity: s.fundamentals?.debt_equity,
-      ebitda_margin: s.fundamentals?.ebitda_margin,
-    })), null, 2)}`;
+    dataContext = `\n\nDADOS REAIS DO MERCADO COLETADOS NO SUPABASE (${rawData.length} AÇÕES ANALISADAS):\n${JSON.stringify(rawData.map(s => {
+      const history = historicalIndications[s.ticker] || [];
+      return {
+        ticker: s.ticker,
+        current_price: s.current_price,
+        // Campos críticos para cálculo de suporte, stop e alvo:
+        week_52_low: s.fundamentals?.week_52_low,
+        week_52_high: s.fundamentals?.week_52_high,
+        daily_change_pct: s.fundamentals?.daily_change_pct,
+        ytd_return_pct: s.fundamentals?.ytd_return_pct,
+        avg_volume_52w: s.fundamentals?.avg_volume_52w,
+        // Fundamentos
+        pl: s.fundamentals?.pl,
+        pvp: s.fundamentals?.pvp,
+        roe: s.fundamentals?.roe,
+        dividend_yield: s.fundamentals?.dividend_yield,
+        net_margin: s.fundamentals?.net_margin,
+        debt_equity: s.fundamentals?.debt_equity,
+        ebitda_margin: s.fundamentals?.ebitda_margin,
+        histórico_indicações_ia: history.length > 0 ? history : undefined
+      };
+    }), null, 2)}`;
   } else {
     dataContext = `\n\nNENHUM DADO DA API DISPONÍVEL. Use seu conhecimento de treinamento para selecionar as melhores oportunidades de reversão no mercado brasileiro (B3). Sinalize na análise que os dados são estimativas.`;
   }
 
-  const userPrompt = `Analise o universo de ${rawData.length} ações fornecidas na B3 considerando a data de hoje (${targetWindow.baseDateFormatted}) e horizonte de ${targetWindow.targetPeriodDescription}. Retorne as TOP ${recommendationCount} melhores oportunidades de reversão de tendência (Bottom Fishing / Smart Money).${dataContext}
+  const userPrompt = `Analise o universo de ${rawData.length} ações fornecidas na B3 considerando a data de hoje (${targetWindow.baseDateFormatted}) e horizonte de ${targetWindow.targetPeriodDescription}. 
+Preste muita atenção ao 'histórico_indicações_ia' se existir para a ação. Isso mostra as últimas vezes que você mesmo recomendou essa ação e qual foi o resultado (LUCRO, PERDA, ou ABERTA). Se a ação tiver um histórico de PERDA recente, seja muito mais rigoroso na sua pontuação. Se tiver histórico de LUCRO, ela pode ser um padrão que você domina. 
+
+Retorne as TOP ${recommendationCount} melhores oportunidades de reversão de tendência (Bottom Fishing / Smart Money).${dataContext}
 
 Retorne EXATAMENTE este formato JSON:
 {

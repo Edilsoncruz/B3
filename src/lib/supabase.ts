@@ -159,3 +159,171 @@ export async function bulkUpsertStockCache(stocks: Partial<StockCache>[]): Promi
     console.log(`[Supabase] ✅ ${rows.length} ações sincronizadas e gravadas em lote.`);
   }
 }
+
+export async function saveAnalyzedStocks(stocks: any[]): Promise<boolean> {
+  if (!supabaseUrl || stocks.length === 0) return false;
+  
+  const now = new Date();
+  const dateStr = now.toISOString().replace(/[:.]/g, '-');
+
+  const rows = stocks.map(stock => {
+    const tck = (stock.ticker || 'B3').toUpperCase();
+    return {
+      id: stock.id || `${tck}_${dateStr}`,
+      ticker: tck,
+      company_name: stock.company_name,
+      sector: stock.sector,
+      current_price: stock.current_price,
+      entry_price: stock.entry_price,
+      target_price: stock.target_price,
+      stop_loss: stock.stop_loss,
+      success_probability: stock.success_probability,
+      strategy_score: stock.strategy_score || stock.reversal_potential_score,
+      risk_reward_ratio: stock.risk_reward_ratio,
+      action: stock.action,
+      analysis: stock.analysis,
+      stock_data: stock,
+      updated_at: now.toISOString()
+    };
+  });
+
+  const { error } = await supabase
+    .from('analyzed_stocks')
+    .insert(rows);
+
+  if (error) {
+    console.error('[Supabase] Erro ao salvar ações analisadas:', error.message);
+    return false;
+  }
+  return true;
+}
+
+export async function toggleFavoriteStatus(ticker: string, isFavorite: boolean): Promise<boolean> {
+  if (!supabaseUrl) return false;
+  
+  const { error } = await supabase
+    .from('analyzed_stocks')
+    .update({ is_favorite: isFavorite })
+    .eq('ticker', ticker.toUpperCase());
+
+  if (error) {
+    console.error('[Supabase] Erro ao alterar favorito:', error.message);
+    return false;
+  }
+  return true;
+}
+
+export async function getFavoriteTickers(): Promise<string[]> {
+  if (!supabaseUrl) return [];
+
+  const { data, error } = await supabase
+    .from('analyzed_stocks')
+    .select('ticker')
+    .eq('is_favorite', true);
+
+  if (error) {
+    console.error('[Supabase] Erro ao buscar favoritos:', error.message);
+    return [];
+  }
+
+  return (data || []).map((d: any) => d.ticker);
+}
+
+export interface OperationData {
+  invested_amount: number;
+  shares_quantity: number;
+  average_price: number;
+  programmed_target: number;
+  programmed_stop: number;
+  investment_date: string;
+  operation_status: string;
+}
+
+export async function saveOperation(id: string, op: OperationData): Promise<boolean> {
+  if (!supabaseUrl) return false;
+  
+  const { error } = await supabase
+    .from('analyzed_stocks')
+    .update({
+      invested_amount: op.invested_amount,
+      shares_quantity: op.shares_quantity,
+      average_price: op.average_price,
+      programmed_target: op.programmed_target,
+      programmed_stop: op.programmed_stop,
+      investment_date: op.investment_date,
+      operation_status: op.operation_status,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', id);
+
+  if (error) {
+    console.error('[Supabase] Erro ao salvar operação:', error.message);
+    return false;
+  }
+  return true;
+}
+
+export interface CloseOperationData {
+  closing_price: number;
+  closing_date: string;
+  closing_reason: string;
+  profit_loss: number;
+  profit_loss_percentage: number;
+}
+
+export async function closeOperation(id: string, closeData: CloseOperationData): Promise<boolean> {
+  if (!supabaseUrl) return false;
+
+  const { error } = await supabase
+    .from('analyzed_stocks')
+    .update({
+      operation_status: closeData.closing_reason === 'Cancelar Operação' ? 'CANCELADO' : (closeData.closing_reason === 'Alvo Atingido' ? 'ALVO ATINGIDO' : 'STOP ATINGIDO'),
+      closing_price: closeData.closing_price,
+      closing_date: closeData.closing_date,
+      closing_reason: closeData.closing_reason,
+      profit_loss: closeData.profit_loss,
+      profit_loss_percentage: closeData.profit_loss_percentage,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', id);
+
+  if (error) {
+    console.error('[Supabase] Erro ao encerrar operação:', error.message);
+    return false;
+  }
+  return true;
+}
+
+export async function getHistoricalIndications(tickers: string[]) {
+  if (!supabaseUrl || tickers.length === 0) return {};
+
+  const { data, error } = await supabase
+    .from('analyzed_stocks')
+    .select('ticker, created_at, indication_status, entry_price, target_price')
+    .in('ticker', tickers)
+    .order('created_at', { ascending: false })
+    .limit(200);
+
+  if (error || !data) {
+    console.error('[Supabase] Erro ao buscar histórico de indicações:', error?.message);
+    return {};
+  }
+
+  // Agrupar por ticker e pegar as últimas 3
+  const history: Record<string, any[]> = {};
+  for (const row of data) {
+    if (!history[row.ticker]) {
+      history[row.ticker] = [];
+    }
+    if (history[row.ticker].length < 3) {
+      history[row.ticker].push({
+        date: new Date(row.created_at).toLocaleDateString('pt-BR'),
+        status: row.indication_status,
+        entry: row.entry_price,
+        target: row.target_price
+      });
+    }
+  }
+
+  return history;
+}
