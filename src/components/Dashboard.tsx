@@ -14,6 +14,9 @@ import { DEFAULT_SELECTION_PARAMS, SelectionParameters } from "../services/unive
 import { KnowledgeBaseDrawer } from "./KnowledgeBaseDrawer";
 import { saveAnalyzedStocks, getHistoricalIndications } from "../lib/supabase";
 import { verifyOpenOperations } from "../services/operationsManager";
+import { AuditManager } from "../services/auditManager";
+import { generateAuditPDF } from "../utils/AuditPDFGenerator";
+import { HistoryTab } from "./HistoryTab";
 
 export function Dashboard() {
   const [loading, setLoading] = useState(false);
@@ -35,6 +38,13 @@ export function Dashboard() {
   const [showFilters, setShowFilters] = useState(false);
   const [poolSize, setPoolSize] = useState(50);
   const [selectionParams, setSelectionParams] = useState<SelectionParameters>(DEFAULT_SELECTION_PARAMS);
+
+  // Audit Mode
+  const [isAuditMode, setIsAuditMode] = useState(false);
+  const [lastAuditId, setLastAuditId] = useState<string | null>(null);
+
+  // Tab State
+  const [activeTab, setActiveTab] = useState<'ANALISE' | 'HISTORICO'>('ANALISE');
 
   // Controle do Drawer da Base de Conhecimento
   const [isKnowledgeDrawerOpen, setIsKnowledgeDrawerOpen] = useState(false);
@@ -74,6 +84,22 @@ export function Dashboard() {
     const startTime = performance.now();
 
     try {
+      const auditManager = new AuditManager(isAuditMode);
+      setLastAuditId(isAuditMode ? auditManager.getAuditId() : null);
+
+      if (auditManager.isEnabled()) {
+        await auditManager.startRun({
+          strategy: 'Smart Money Bottom Fishing',
+          strategyVersion: '1.0',
+          analysisMode: specificTicker.trim() ? 'Ticker Específico' : 'Varredura Dinâmica',
+          poolSize: specificTicker.trim() ? 1 : poolSize,
+          recommendationCount,
+          targetPeriodValue,
+          targetPeriodUnit,
+          selectionParams
+        });
+      }
+
       // ETAPA 1 & 2: Universo Inicial & Seleção Inteligente
       setCurrentStep(1);
       setProgressMsg("Etapa 1 & 2: Mapeando universo amplo da B3 e executando Seleção Inteligente...");
@@ -85,6 +111,7 @@ export function Dashboard() {
           ...selectionParams,
           poolSize: specificTicker.trim() ? 1 : poolSize
         },
+        auditManager,
         onProgress: (p) => {
           setCurrentStep(3);
           setProgressMsg(`Etapa 3 & 4: Verificando Supabase (${p.current}/${p.total}) - ${p.message}`);
@@ -112,7 +139,8 @@ export function Dashboard() {
         recommendationCount,
         targetPeriodValue,
         targetPeriodUnit,
-        execDate
+        execDate,
+        deepAnalysis
       );
 
       const endTime = performance.now();
@@ -139,6 +167,16 @@ export function Dashboard() {
         saveAnalyzedStocks(result.ranked_stocks).catch(err => {
           console.error("Failed to save analyzed stocks:", err);
         });
+
+        if (auditManager.isEnabled()) {
+          await auditManager.logResults(result.ranked_stocks);
+          await auditManager.finishRun({
+            totalExecutionTimeMs: Math.round(endTime - startTime),
+            totalTokens: result.token_usage?.total_tokens || 0,
+            promptTokens: result.token_usage?.prompt_tokens || 0,
+            responseTokens: result.token_usage?.completion_tokens || 0
+          });
+        }
       }
 
       setData(result);
@@ -375,6 +413,31 @@ export function Dashboard() {
               </button>
 
               <button
+                onClick={() => setIsBacktestMode(!isBacktestMode)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all ${
+                  isBacktestMode 
+                    ? "bg-amber-500 text-black font-bold" 
+                    : "text-[#8E9299] hover:text-white hover:bg-[#1e1f23]"
+                }`}
+              >
+                <History className="w-3.5 h-3.5" />
+                <span className="hidden lg:inline">Backteste</span>
+              </button>
+
+              <button
+                onClick={() => setIsAuditMode(!isAuditMode)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all ${
+                  isAuditMode 
+                    ? "bg-rose-600 text-white font-bold" 
+                    : "text-[#8E9299] hover:text-white hover:bg-[#1e1f23]"
+                }`}
+                title="Modo Auditoria: Grava logs detalhados de toda a execução para análise posterior."
+              >
+                <AlertCircle className="w-3.5 h-3.5" />
+                <span className="hidden lg:inline">Auditoria</span>
+              </button>
+
+              <button
                 onClick={() => setDeepAnalysis(!deepAnalysis)}
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all ${
                   deepAnalysis 
@@ -398,6 +461,21 @@ export function Dashboard() {
             </button>
           </div>
         </div>
+        
+        <div className="max-w-6xl mx-auto px-6 flex items-center gap-6 mt-4">
+          <button
+            onClick={() => setActiveTab('ANALISE')}
+            className={`pb-2 border-b-2 font-semibold text-sm transition-colors cursor-pointer ${activeTab === 'ANALISE' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-[#8E9299] hover:text-white'}`}
+          >
+            Análise Dinâmica
+          </button>
+          <button
+            onClick={() => setActiveTab('HISTORICO')}
+            className={`pb-2 border-b-2 font-semibold text-sm transition-colors cursor-pointer ${activeTab === 'HISTORICO' ? 'border-blue-500 text-blue-400' : 'border-transparent text-[#8E9299] hover:text-white'}`}
+          >
+            Histórico
+          </button>
+        </div>
       </header>
 
       {/* Drawer da Base de Conhecimento */}
@@ -408,7 +486,7 @@ export function Dashboard() {
 
       {/* Critérios de Seleção Inteligente Bar */}
       <AnimatePresence>
-        {showFilters && (
+        {activeTab === 'ANALISE' && showFilters && (
           <motion.div 
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
@@ -498,7 +576,7 @@ export function Dashboard() {
       </AnimatePresence>
 
       {/* Simulator Settings Bar */}
-      {isSimulationEnabled && (
+      {activeTab === 'ANALISE' && isSimulationEnabled && (
         <motion.div 
           initial={{ height: 0, opacity: 0 }}
           animate={{ height: "auto", opacity: 1 }}
@@ -538,7 +616,7 @@ export function Dashboard() {
       )}
 
       {/* Backtest Settings Bar */}
-      {isBacktestMode && (
+      {activeTab === 'ANALISE' && isBacktestMode && (
         <motion.div 
           initial={{ height: 0, opacity: 0 }}
           animate={{ height: "auto", opacity: 1 }}
@@ -568,6 +646,9 @@ export function Dashboard() {
       )}
 
       {/* Main Content */}
+      {activeTab === 'HISTORICO' ? (
+        <HistoryTab />
+      ) : (
       <main className="max-w-6xl mx-auto px-6 py-10">
         {/* Empty State */}
         {!data && !loading && !error && (
@@ -616,6 +697,16 @@ export function Dashboard() {
                 <Search className="w-4 h-4" />
                 Iniciar Varredura Inteligente (Top {poolSize} Ações)
               </button>
+
+              {lastAuditId && isAuditMode && !loading && !error && (
+                <button
+                  onClick={() => generateAuditPDF(lastAuditId)}
+                  className="flex items-center gap-2 px-6 py-2 rounded-full bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-lg transition-all cursor-pointer mt-2"
+                >
+                  <Download className="w-4 h-4" />
+                  Gerar Relatório de Auditoria PDF
+                </button>
+              )}
 
               <div className="flex flex-wrap justify-center items-center gap-2 mt-2">
                 <span className="text-xs text-[#8E9299] mr-1">Atalhos rápidos:</span>
@@ -696,6 +787,18 @@ export function Dashboard() {
           >
 
             {/* AI Recommendation Summary */}
+            {lastAuditId && isAuditMode && (
+              <div className="flex justify-end mb-4">
+                <button
+                  onClick={() => generateAuditPDF(lastAuditId)}
+                  className="flex items-center gap-2 px-6 py-2 rounded-full bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-lg transition-all cursor-pointer"
+                >
+                  <Download className="w-4 h-4" />
+                  Gerar Relatório de Auditoria PDF
+                </button>
+              </div>
+            )}
+
             {isSimulationEnabled && data.ai_recommendation && simulationResult && (
               <motion.div 
                 initial={{ opacity: 0, y: 20 }}
@@ -957,6 +1060,7 @@ export function Dashboard() {
           );
         })()}
       </main>
+      )}
     </div>
   );
 }

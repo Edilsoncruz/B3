@@ -327,3 +327,92 @@ export async function getHistoricalIndications(tickers: string[]) {
 
   return history;
 }
+
+export interface HistoryFilters {
+  startDate?: string;
+  endDate?: string;
+  ticker?: string;
+  statusIndication?: string;
+  statusOperation?: string;
+  minScore?: number;
+  maxScore?: number;
+  minProbability?: number;
+  maxProbability?: number;
+  sector?: string;
+}
+
+export async function getIndicationsHistoryWithFilters(
+  filters: HistoryFilters,
+  page: number = 1,
+  limit: number = 20,
+  orderBy: string = 'created_at',
+  ascending: boolean = false
+) {
+  if (!supabaseUrl) return { data: [], count: 0 };
+
+  let query = supabase
+    .from('analyzed_stocks')
+    .select('*', { count: 'exact' });
+
+  // Aplicação de filtros
+  if (filters.startDate) {
+    query = query.gte('created_at', filters.startDate);
+  }
+  if (filters.endDate) {
+    query = query.lte('created_at', filters.endDate + 'T23:59:59.999Z');
+  }
+  if (filters.ticker) {
+    query = query.ilike('ticker', `%${filters.ticker}%`);
+  }
+  if (filters.statusIndication) {
+    query = query.eq('indication_status', filters.statusIndication);
+  }
+  if (filters.statusOperation) {
+    if (filters.statusOperation === 'SEM OPERAÇÃO') {
+      // Quando não tem operação, operation_status pode ser nulo ou string vazia,
+      // mas como na tabela tem um default 'ABERTA' (que não faz sentido se não houve investimento real),
+      // precisamos verificar invest_amount nulo ou 0.
+      query = query.or('invested_amount.is.null,invested_amount.eq.0');
+    } else {
+      query = query.eq('operation_status', filters.statusOperation)
+                   .gt('invested_amount', 0);
+    }
+  }
+  if (filters.minScore !== undefined) {
+    query = query.gte('strategy_score', filters.minScore);
+  }
+  if (filters.maxScore !== undefined) {
+    query = query.lte('strategy_score', filters.maxScore);
+  }
+  if (filters.minProbability !== undefined) {
+    query = query.gte('success_probability', filters.minProbability);
+  }
+  if (filters.maxProbability !== undefined) {
+    query = query.lte('success_probability', filters.maxProbability);
+  }
+  if (filters.sector) {
+    query = query.eq('sector', filters.sector);
+  }
+
+  // Ordenação
+  const validOrderCols = ['created_at', 'ticker', 'indication_status', 'operation_status', 'strategy_score', 'success_probability'];
+  if (validOrderCols.includes(orderBy)) {
+    query = query.order(orderBy, { ascending });
+  } else {
+    query = query.order('created_at', { ascending: false });
+  }
+
+  // Paginação
+  const from = (page - 1) * limit;
+  const to = from + limit - 1;
+  query = query.range(from, to);
+
+  const { data, error, count } = await query;
+
+  if (error) {
+    console.error('[Supabase] Erro ao buscar histórico com filtros:', error.message);
+    return { data: [], count: 0 };
+  }
+
+  return { data, count: count || 0 };
+}

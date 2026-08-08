@@ -96,3 +96,109 @@ CREATE POLICY "Enable delete for all users" ON analyzed_stocks FOR DELETE USING 
 
 DROP POLICY IF EXISTS "Enable update for all users" ON analyzed_stocks;
 CREATE POLICY "Enable update for all users" ON analyzed_stocks FOR UPDATE USING (true);
+
+-- --------------------------------------------------------
+-- TABELAS DE AUDITORIA
+-- --------------------------------------------------------
+
+-- 1. Execução Principal (Audit Run)
+CREATE TABLE IF NOT EXISTS audit_runs (
+    audit_id VARCHAR(50) PRIMARY KEY,
+    execution_date TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc', now()),
+    strategy VARCHAR(100),
+    strategy_version VARCHAR(50),
+    analysis_mode VARCHAR(100),
+    pool_size INTEGER,
+    recommendation_count INTEGER,
+    target_period_value INTEGER,
+    target_period_unit VARCHAR(20),
+    selection_params JSONB,
+    total_execution_time_ms INTEGER,
+    total_tokens INTEGER,
+    total_prompt_tokens INTEGER,
+    total_response_tokens INTEGER,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc', now())
+);
+
+ALTER TABLE audit_runs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Enable all for all users on audit_runs" ON audit_runs FOR ALL USING (true) WITH CHECK (true);
+
+-- 2. Eventos da Execução (Linha do Tempo)
+CREATE TABLE IF NOT EXISTS audit_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    audit_id VARCHAR(50) REFERENCES audit_runs(audit_id) ON DELETE CASCADE,
+    sequence_number INTEGER NOT NULL,
+    event_timestamp TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc', now()),
+    stage VARCHAR(100),
+    event_type VARCHAR(50),
+    ticker VARCHAR(10),
+    description TEXT,
+    duration_ms INTEGER,
+    metadata JSONB
+);
+
+ALTER TABLE audit_events ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Enable all for all users on audit_events" ON audit_events FOR ALL USING (true) WITH CHECK (true);
+
+-- 3. Avaliação de Ativos (Universo)
+CREATE TABLE IF NOT EXISTS audit_asset_evaluations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    audit_id VARCHAR(50) REFERENCES audit_runs(audit_id) ON DELETE CASCADE,
+    ticker VARCHAR(10) NOT NULL,
+    rank_position INTEGER,
+    drop_score DECIMAL(5,2),
+    volume_score DECIMAL(5,2),
+    fundamentals_score DECIMAL(5,2),
+    support_score DECIMAL(5,2),
+    composite_score DECIMAL(5,2),
+    status VARCHAR(20), -- 'SELECIONADA', 'NÃO SELECIONADA'
+    rejection_reason TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc', now())
+);
+
+ALTER TABLE audit_asset_evaluations ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Enable all for all users on audit_asset_evaluations" ON audit_asset_evaluations FOR ALL USING (true) WITH CHECK (true);
+
+-- 4. Sincronização de Dados
+CREATE TABLE IF NOT EXISTS audit_sync (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    audit_id VARCHAR(50) REFERENCES audit_runs(audit_id) ON DELETE CASCADE,
+    ticker VARCHAR(10) NOT NULL,
+    sync_status VARCHAR(50), -- 'CACHE HIT', 'MISSING PERIOD', 'ERROR'
+    last_available_date TIMESTAMP WITH TIME ZONE,
+    target_date TIMESTAMP WITH TIME ZONE,
+    missing_period_start TIMESTAMP WITH TIME ZONE,
+    missing_period_end TIMESTAMP WITH TIME ZONE,
+    records_found INTEGER,
+    records_added INTEGER,
+    source VARCHAR(50),
+    error_message TEXT,
+    duration_ms INTEGER,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc', now())
+);
+
+ALTER TABLE audit_sync ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Enable all for all users on audit_sync" ON audit_sync FOR ALL USING (true) WITH CHECK (true);
+
+-- 5. Resultados Finais da IA
+CREATE TABLE IF NOT EXISTS audit_results (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    audit_id VARCHAR(50) REFERENCES audit_runs(audit_id) ON DELETE CASCADE,
+    ticker VARCHAR(10) NOT NULL,
+    final_rank INTEGER,
+    analyzed_price DECIMAL(10,2),
+    target_price DECIMAL(10,2),
+    stop_loss DECIMAL(10,2),
+    success_probability DECIMAL(5,2),
+    strategy_score DECIMAL(5,2),
+    risk_reward_ratio DECIMAL(5,2),
+    estimated_timeframe VARCHAR(50),
+    approved_criteria JSONB,
+    rejected_criteria JSONB,
+    analysis_text TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc', now())
+);
+
+ALTER TABLE audit_results ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Enable all for all users on audit_results" ON audit_results FOR ALL USING (true) WITH CHECK (true);
+

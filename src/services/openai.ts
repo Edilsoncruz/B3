@@ -106,7 +106,8 @@ export async function analyzeMarket(
   recommendationCount: number = 5,
   targetPeriodValue: number = 2,
   targetPeriodUnit: string = 'meses',
-  executionDate?: Date
+  executionDate?: Date,
+  useDeepIA: boolean = false
 ): Promise<AIRecommendation> {
   if (!openai) {
     throw new Error('Chave VITE_OPENAI_API_KEY não configurada no .env.local');
@@ -236,8 +237,10 @@ Retorne EXATAMENTE este formato JSON:
 }`;
 
   try {
+    const modelToUse = useDeepIA ? 'gpt-5.6-sol' : 'gpt-5.6-luna';
+
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: modelToUse,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt }

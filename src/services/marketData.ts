@@ -12,6 +12,7 @@ import { getCachedStock, getAllCachedStocks, setCachedStock, StockCache, isStock
 import { selectDynamicUniverse, SelectionParameters, DEFAULT_SELECTION_PARAMS, ScreeningResult } from './universeSelector';
 import { syncAssetsIncrementally, SyncProgressCallback, IncrementalSyncResult } from './incrementalSync';
 import { getFundamentals, getStockQuote, getStockStats } from './bolsai';
+import { AuditManager } from './auditManager';
 
 export interface MarketCandidatesResult {
   candidates: StockCache[];
@@ -31,6 +32,7 @@ export interface MarketScanOptions {
   selectionParams?: Partial<SelectionParameters>;
   onProgress?: SyncProgressCallback;
   forceRefresh?: boolean;
+  auditManager?: AuditManager;
 }
 
 /**
@@ -157,14 +159,16 @@ export async function getMarketCandidates(
 
   const { selectedTickers, screenedResults, totalUniverseCount } = await selectDynamicUniverse(
     customParams,
-    cachedMap
+    cachedMap,
+    opts.auditManager
   );
 
   // 3. Etapas 3 & 4: Atualização Incremental e Gravação no Supabase
   const syncResult: IncrementalSyncResult = await syncAssetsIncrementally(
     selectedTickers,
     opts.onProgress,
-    opts.forceRefresh ? 0 : 12
+    opts.forceRefresh ? 0 : 12,
+    opts.auditManager
   );
 
   return {

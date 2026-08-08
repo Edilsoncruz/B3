@@ -7,6 +7,7 @@
  */
 
 import { StockCache } from '../lib/supabase';
+import { AuditManager } from './auditManager';
 
 // Parâmetros configuráveis da Seleção Inteligente
 export interface SelectionParameters {
@@ -39,6 +40,7 @@ export interface ScreeningResult {
   fundamentalsScore: number;
   supportScore: number;
   reason: string;
+  status?: string;
 }
 
 /**
@@ -205,13 +207,20 @@ export function calculateScreeningScore(
  */
 export async function selectDynamicUniverse(
   customParams: Partial<SelectionParameters> = {},
-  existingDataMap: Record<string, StockCache> = {}
+  existingDataMap: Record<string, StockCache> = {},
+  auditManager?: AuditManager
 ): Promise<{
   selectedTickers: string[];
   screenedResults: ScreeningResult[];
   totalUniverseCount: number;
 }> {
   const params: SelectionParameters = { ...DEFAULT_SELECTION_PARAMS, ...customParams };
+  
+  if (auditManager?.isEnabled()) {
+    await auditManager.logEvent('SELECTION', 'UNIVERSE_LOADED', 'ALL', `Avaliando universo de ${B3_FULL_CATALOG.length} ativos da B3`, 0, {
+      catalog: B3_FULL_CATALOG
+    });
+  }
   
   console.log(`\n🧠 [Etapa 1 & 2: Seleção Inteligente] Avaliando universo de ${B3_FULL_CATALOG.length} ativos da B3...`);
   console.log(`   Critérios: Pool alvo = ${params.poolSize}, Pesos [Queda: ${params.dropWeight}%, Volume: ${params.volumeWeight}%, Fundamentos: ${params.fundamentalsWeight}%, Suporte: ${params.supportWeight}%]`);
@@ -228,6 +237,21 @@ export async function selectDynamicUniverse(
   // Seleciona os Top N
   const topSelected = evaluatedCandidates.slice(0, params.poolSize);
   const selectedTickers = topSelected.map(c => c.ticker);
+
+  // Update status and reason for logging
+  evaluatedCandidates.forEach((c, idx) => {
+    c.status = idx < params.poolSize ? 'SELECIONADA' : 'NÃO SELECIONADA';
+    if (idx >= params.poolSize && !c.reason.includes('score insuficiente')) {
+      c.reason = `Score insuficiente (${c.score}). Apenas os Top ${params.poolSize} foram selecionados. ` + c.reason;
+    }
+  });
+
+  if (auditManager?.isEnabled()) {
+    await auditManager.logAssetEvaluations(evaluatedCandidates);
+    await auditManager.logEvent('SELECTION', 'SELECTION_COMPLETED', 'ALL', `${selectedTickers.length} ações selecionadas dinamicamente`, 0, {
+      topScore: topSelected[0]?.score
+    });
+  }
 
   console.log(`   ✨ [Seleção Concluída] ${selectedTickers.length} ações selecionadas dinamicamente (Top Score: ${topSelected[0]?.ticker} com score ${topSelected[0]?.score}).`);
 

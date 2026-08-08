@@ -8,6 +8,7 @@
 
 import { getMultipleCachedStocks, setCachedStock, isStockUpToDate, StockCache } from '../lib/supabase';
 import { getFundamentals, getStockQuote, getStockStats } from './bolsai';
+import { AuditManager } from './auditManager';
 
 export interface AssetSyncStatus {
   ticker: string;
@@ -109,7 +110,8 @@ async function fetchAndEnrichStockFromUsebolsa(ticker: string, existingCache?: S
 export async function syncAssetsIncrementally(
   tickers: string[],
   onProgress?: SyncProgressCallback,
-  maxCacheAgeHours: number = 12
+  maxCacheAgeHours: number = 12,
+  auditManager?: AuditManager
 ): Promise<IncrementalSyncResult> {
   const total = tickers.length;
   console.log(`\n⚡ [Etapas 3 & 4: Atualização Incremental Supabase] Iniciando verificação individual para ${total} ativos...`);
@@ -139,6 +141,23 @@ export async function syncAssetsIncrementally(
         lastUpdated: cachedItem.updated_at,
         source: 'SUPABASE_CACHE'
       });
+
+      if (auditManager?.isEnabled()) {
+        const startTime = Date.now();
+        await auditManager.logSync({
+          ticker,
+          status: 'CACHE HIT',
+          lastAvailableDate: cachedItem.updated_at,
+          targetDate: new Date().toISOString(),
+          missingPeriodStart: null,
+          missingPeriodEnd: null,
+          recordsFound: 1,
+          recordsAdded: 0,
+          source: 'SUPABASE',
+          errorMessage: null,
+          durationMs: Date.now() - startTime
+        });
+      }
 
       console.log(`  📦 [Supabase Cache HIT] ${ticker} já atualizado (${cachedItem.updated_at}). ZERO chamadas de API.`);
 
@@ -175,6 +194,22 @@ export async function syncAssetsIncrementally(
           source: 'USEBOLSA_INCREMENTAL'
         });
 
+        if (auditManager?.isEnabled()) {
+          await auditManager.logSync({
+            ticker,
+            status: 'FETCHED',
+            lastAvailableDate: cachedItem ? cachedItem.updated_at : null,
+            targetDate: new Date().toISOString(),
+            missingPeriodStart: cachedItem ? cachedItem.updated_at : null,
+            missingPeriodEnd: new Date().toISOString(),
+            recordsFound: 1,
+            recordsAdded: 1,
+            source: 'USEBOLSA',
+            errorMessage: null,
+            durationMs: 0
+          });
+        }
+
         if (onProgress) {
           onProgress({
             current: i + 1,
@@ -187,6 +222,22 @@ export async function syncAssetsIncrementally(
       } catch (err: any) {
         failedCount++;
         console.error(`  ❌ [Falha ao atualizar ${ticker}]:`, err.message);
+
+        if (auditManager?.isEnabled()) {
+          await auditManager.logSync({
+            ticker,
+            status: 'ERROR',
+            lastAvailableDate: cachedItem ? cachedItem.updated_at : null,
+            targetDate: new Date().toISOString(),
+            missingPeriodStart: null,
+            missingPeriodEnd: null,
+            recordsFound: 0,
+            recordsAdded: 0,
+            source: 'USEBOLSA',
+            errorMessage: err.message,
+            durationMs: 0
+          });
+        }
 
         if (cachedItem) {
           // Fallback seguro: usa o dado anterior que já existia no banco
