@@ -146,18 +146,18 @@ REQUISITOS OBRIGATÓRIOS PARA CADA RECOMENDAÇÃO:
 2. strategy_score & reversal_potential_score: Pontuação de 0 a 100 baseada na força dos sinais de reversão e fluxo (deve ser >= 65).
 3. success_probability: Probabilidade percentual estimada de sucesso da operação (ex: 75% a 92%).
 4. current_price & entry_price: Preço exato do ativo informado na base (ou preço de entrada recomendado).
-5. target_price: Alvo técnico realista para o horizonte estipulado (${targetWindow.targetPeriodDescription}), geralmente entre 15% e 40% acima do entry_price.
-6. stop_loss: Stop Loss técnico posicionado logo abaixo do suporte (geralmente entre 8% e 18% abaixo do entry_price).
+5. target_price: Alvo técnico realista PROPORCIONAL ao horizonte estipulado (${targetPeriodValue} ${targetPeriodUnit}). IMPORTANTE: O preço-alvo DEVE refletir o tempo. Horizontes curtos (ex: 1 a 2 meses) exigem alvos menores (5% a 15%), enquanto horizontes longos (6 a 12 meses) permitem alvos maiores (20% a 50%).
+6. stop_loss: Stop Loss técnico posicionado logo abaixo do suporte. Deve estar calibrado com o horizonte de tempo (prazos maiores exigem stops ligeiramente mais folgados para aguentar a volatilidade).
 7. stop_loss_percentage: Risco percentual exato: ((entry_price - stop_loss) / entry_price) * 100.
 8. risk_reward_ratio: Relação Risco x Retorno: (target_price - entry_price) / (entry_price - stop_loss). Mínimo de 1:2.
 9. estimated_target_date & estimated_timeframe: Tempo estimado calculado a partir de hoje (${targetWindow.baseDateFormatted}) para o alvo, ex: '${targetWindow.targetPeriodDescription}'.
 10. smart_money_signals: Lista com 2 a 4 gatilhos de fluxo institucional (ex: 'Acumulação em suporte histórico', 'Divergência de volume em fundo').
-11. analysis & reason: Justificativa técnica e fundamentalista concisa da recomendação.
+11. analysis & reason: Justificativa técnica e fundamentalista. Seja direto para otimizar tokens, MAS mantenha o contexto essencial explicando o que está acontecendo com a empresa atualmente que justifica o trade.
 12. sector: Nome do setor macro da empresa na B3 (ex: 'Materiais Básicos', 'Financeiro').
 13. group: Nome do subsetor ou grupo (ex: 'Papel e Celulose', 'Bancos').
 ${knowledgeContext}
 
-Responda SOMENTE com o JSON no formato especificado contendo exatamente ${recommendationCount} ativos em 'ranked_stocks'.`;
+Responda SOMENTE com o JSON no formato especificado contendo O RANKING COMPLETO DE TODOS os ${rawData.length} ativos enviados em 'ranked_stocks'. Não trunque a lista, ordene da melhor oportunidade (#1) para a pior (#${rawData.length}).`;
 
   // Contexto dos dados disponíveis — inclui campos chave para o cálculo de suporte/stop/alvo
   const hasData = rawData.length > 0;
@@ -193,7 +193,7 @@ Responda SOMENTE com o JSON no formato especificado contendo exatamente ${recomm
   const userPrompt = `Analise o universo de ${rawData.length} ações fornecidas na B3 considerando a data de hoje (${targetWindow.baseDateFormatted}) e horizonte de ${targetWindow.targetPeriodDescription}. 
 Preste muita atenção ao 'histórico_indicações_ia' se existir para a ação. Isso mostra as últimas vezes que você mesmo recomendou essa ação e qual foi o resultado (LUCRO, PERDA, ou ABERTA). Se a ação tiver um histórico de PERDA recente, seja muito mais rigoroso na sua pontuação. Se tiver histórico de LUCRO, ela pode ser um padrão que você domina. 
 
-Retorne as TOP ${recommendationCount} melhores oportunidades de reversão de tendência (Bottom Fishing / Smart Money).${dataContext}
+Retorne O RANKING COMPLETO de TODAS as ${rawData.length} ações enviadas, ordenadas da melhor para a pior oportunidade de reversão (Bottom Fishing / Smart Money).${dataContext}
 
 Retorne EXATAMENTE este formato JSON:
 {
@@ -237,7 +237,7 @@ Retorne EXATAMENTE este formato JSON:
 }`;
 
   try {
-    const modelToUse = useDeepIA ? 'gpt-5.6-sol' : 'gpt-5.6-luna';
+    const modelToUse = 'gpt-5.6-terra';
 
     const response = await openai.chat.completions.create({
       model: modelToUse,
@@ -245,8 +245,7 @@ Retorne EXATAMENTE este formato JSON:
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt }
       ],
-      response_format: { type: 'json_object' },
-      temperature: 0.2
+      response_format: { type: 'json_object' }
     });
 
     const content = response.choices[0].message.content;
@@ -296,17 +295,9 @@ Retorne EXATAMENTE este formato JSON:
       }
     }
 
-    // Executa a persistência e aprendizado da Base de Conhecimento no Supabase
-    try {
-      const syncResult = await processPostAnalysisKnowledge({
-        confirmedIds,
-        newInsights,
-        strategy: 'Smart Money Bottom Fishing'
-      });
-      console.log(`[KnowledgeBase] 🧠 Sincronização Supabase concluída: ${syncResult.confirmedCount} confirmações, ${syncResult.newCount} novos registros salvos.`);
-    } catch (err) {
-      console.warn('[KnowledgeBase] Erro ao sincronizar aprendizado com o Supabase:', err);
-    }
+    // A persistência e aprendizado da Base de Conhecimento no Supabase
+    // foi movida para o Dashboard.tsx para garantir que ocorra APÓS a validação da Camada 4 (Sol),
+    // impedindo que a IA memorize padrões de indicações rejeitadas pelo Sol.
 
     // Anexa informações de conhecimento ao resultado
     parsed.knowledge_base = {
@@ -331,3 +322,118 @@ Retorne EXATAMENTE este formato JSON:
     throw error;
   }
 }
+
+// ============================================================================
+// CAMADA 2: TRIAGEM INTELIGENTE (GPT-5.6 Luna)
+// ============================================================================
+export interface TriageResult {
+  ticker: string;
+  score: number;
+  scores_por_criterio: {
+    queda: number;
+    volume: number;
+    fundamentos: number;
+    suporte: number;
+  };
+  classificacao: number;
+  elegivel_para_analise_profunda: boolean;
+  principais_fatores: string[];
+  fatores_de_risco: string[];
+  nivel_de_confianca: string;
+}
+
+export interface TriageResponse {
+  ranking: TriageResult[];
+  token_usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+}
+
+export async function triageMarket(
+  eligibleStocks: string[],
+  existingDataMap: Record<string, StockCache>,
+  poolSize: number = 50
+): Promise<TriageResponse> {
+  if (!openai) throw new Error('OpenAI não configurada');
+
+  const stocksData = eligibleStocks.map(ticker => {
+    const cached = existingDataMap[ticker.toUpperCase()];
+    return {
+      ticker,
+      price: cached?.current_price || 'N/A',
+      volume: cached?.fundamentals?.avg_volume_52w || 'N/A',
+      high52w: cached?.fundamentals?.week_52_high || 'N/A',
+      low52w: cached?.fundamentals?.week_52_low || 'N/A',
+      pl: cached?.fundamentals?.pl || 'N/A',
+      pvp: cached?.fundamentals?.pvp || 'N/A',
+      roe: cached?.fundamentals?.roe || 'N/A'
+    };
+  });
+
+  const systemPrompt = `Você é um filtro quantitativo de triagem (Layer 2).
+Sua missão é avaliar um universo elegível de ações e retornar estruturadamente um ranking identificando as ${poolSize} melhores opções para justificar uma análise profunda de Bottom Fishing (reversão).
+Critérios: Queda (30%), Volume (25%), Fundamentos (25%), Suporte (20%).
+Retorne um JSON rigoroso respeitando a saída exigida.`;
+
+  const userPrompt = `Avalie as seguintes ações e selecione as ${poolSize} melhores.\n\nDADOS:\n${JSON.stringify(stocksData)}\n\nRetorne JSON:\n{ "ranking": [ { "ticker": "VALE3", "score": 96, "scores_por_criterio": { "queda": 29, "volume": 24, "fundamentos": 23, "suporte": 20 }, "classificacao": 1, "elegivel_para_analise_profunda": true, "principais_fatores": ["X"], "fatores_de_risco": ["Y"], "nivel_de_confianca": "ALTA" } ] }`;
+
+  const response = await openai.chat.completions.create({
+    model: 'gpt-5.6-luna',
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt }
+    ],
+    response_format: { type: 'json_object' }
+  });
+
+  const parsed = JSON.parse(response.choices[0].message.content || '{"ranking":[]}');
+  
+  parsed.token_usage = {
+    prompt_tokens: response.usage?.prompt_tokens ?? 0,
+    completion_tokens: response.usage?.completion_tokens ?? 0,
+    total_tokens: response.usage?.total_tokens ?? 0,
+  };
+
+  return parsed as TriageResponse;
+}
+
+// ============================================================================
+// CAMADA 4: REVISÃO ESPECIALIZADA (GPT-5.6 Sol)
+// ============================================================================
+export interface ReviewResult {
+  ticker: string;
+  decisao: "APROVADA" | "APROVADA_COM_RESSALVAS" | "REJEITADA";
+  probabilidade_revisada: number;
+  score_revisado: number;
+  motivo_estruturado: string;
+}
+
+export async function reviewIndications(
+  indications: StockAnalysis[],
+  knowledgeContext: string = ''
+): Promise<ReviewResult[]> {
+  if (!openai) throw new Error('OpenAI não configurada');
+
+  const systemPrompt = `Você é um REVISOR INDEPENDENTE especialista (Layer 4).
+Receberá indicações de Bottom Fishing feitas por outro modelo. Sua função NÃO é reescrever, mas auditar de forma cética.
+Valide Score, Probabilidade, Nível de Suporte e Risco/Retorno (R:R).
+Você DEVE aprovar ou apontar falhas graves. Responda apenas "APROVADA", "APROVADA_COM_RESSALVAS" ou "REJEITADA". 
+Se "REJEITADA", seja extremamente sucinto no "motivo_estruturado" (ex: "Risco de suporte inconsistente", "R:R inadequado").`;
+
+  const userPrompt = `Revise as seguintes indicações:\n${JSON.stringify(indications)}\n\nContexto Base:\n${knowledgeContext}\n\nRetorne JSON estrito: { "reviews": [ { "ticker": "...", "decisao": "APROVADA_COM_RESSALVAS", "probabilidade_revisada": 85, "score_revisado": 80, "motivo_estruturado": "Risco de suporte validado, reduzir exposição." } ] }`;
+
+  const response = await openai.chat.completions.create({
+    model: 'gpt-5.6-sol',
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt }
+    ],
+    response_format: { type: 'json_object' }
+  });
+
+  const parsed = JSON.parse(response.choices[0].message.content || '{"reviews":[]}');
+  return parsed.reviews as ReviewResult[];
+}
+

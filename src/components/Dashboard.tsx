@@ -121,9 +121,9 @@ export function Dashboard() {
       const candidates = candidatesResult.candidates;
       setScannedCount(candidates.length);
 
-      // ETAPA 5: Execução da Estratégia de IA sobre o Supabase com Base de Conhecimento
-      setCurrentStep(5);
-      setProgressMsg(`Etapa 5: Consultando Base de Conhecimento e executando estratégia IA sobre ${candidates.length} ativos...`);
+      // ETAPA 3: Execução da Análise Profunda (Terra)
+      setCurrentStep(3);
+      setProgressMsg(`Etapa 3: Consultando Base de Conhecimento e executando Análise Profunda (Terra) sobre ${candidates.length} ativos...`);
 
       const riskStr = deepAnalysis ? "Agressivo (Bottom Fishing Profundo)" : "Moderado (Value Investing)";
       const execDate = isBacktestMode ? new Date(backtestDate) : new Date();
@@ -142,6 +142,112 @@ export function Dashboard() {
         execDate,
         deepAnalysis
       );
+
+      // ETAPA 4: Revisão Especializada (Sol) - Apenas se Análise Profunda = ON
+      if (!deepAnalysis && result && result.ranked_stocks) {
+         // Fluxo normal: pega apenas as N primeiras do ranking gerado pelo Terra
+         result.ranked_stocks = result.ranked_stocks.slice(0, recommendationCount);
+      } else if (deepAnalysis && result && result.ranked_stocks) {
+        setCurrentStep(4);
+        const { reviewIndications } = await import('../services/openai');
+        
+        const allStocks = result.ranked_stocks;
+        const maxEvaluations = recommendationCount * 2;
+        let evaluatedCount = 0;
+        let currentIndex = 0;
+        let aprovadas: any[] = [];
+        let rejeitadasLog: any[] = [];
+        let ressalvasCount = 0;
+
+        while (aprovadas.length < recommendationCount && evaluatedCount < maxEvaluations && currentIndex < allStocks.length) {
+           const faltam = recommendationCount - aprovadas.length;
+           // Lote exato do que falta aprovar, limitado pelo que ainda podemos avaliar
+           const maxNesteLote = Math.min(faltam, maxEvaluations - evaluatedCount);
+           const lote = allStocks.slice(currentIndex, currentIndex + maxNesteLote);
+           
+           if (lote.length === 0) break;
+           
+           setProgressMsg(`Etapa 4: Sol avaliando candidatas ${currentIndex + 1} a ${currentIndex + lote.length}...`);
+           
+           try {
+             const reviews = await reviewIndications(lote, "Contexto Estratégia B3");
+             evaluatedCount += lote.length;
+             currentIndex += lote.length;
+
+             reviews.forEach(review => {
+               const stock = lote.find(s => s.ticker === review.ticker);
+               if (!stock) return;
+
+               if (review.decisao === "REJEITADA") {
+                 rejeitadasLog.push({
+                   ticker: review.ticker,
+                   motivo: review.motivo_estruturado,
+                   scoreTerra: stock.strategy_score,
+                   probTerra: stock.success_probability
+                 });
+               } else {
+                 // APROVADA ou APROVADA_COM_RESSALVAS
+                 stock.success_probability = review.probabilidade_revisada || stock.success_probability;
+                 stock.strategy_score = review.score_revisado || stock.strategy_score;
+                 stock.reversal_potential_score = review.score_revisado || stock.reversal_potential_score;
+                 
+                 let prefix = review.decisao === "APROVADA_COM_RESSALVAS" 
+                               ? `[APROVADA COM RESSALVAS]\n${review.motivo_estruturado}\n\n---\n` 
+                               : `[APROVADA PELO SOL]\n\n---\n`;
+                 
+                 stock.analysis = prefix + stock.analysis;
+                 if (review.decisao === "APROVADA_COM_RESSALVAS") ressalvasCount++;
+                 
+                 aprovadas.push(stock);
+               }
+             });
+           } catch (err: any) {
+              console.error("Erro na Revisão Sol (Lote):", err);
+              alert("Falha na revisão profunda (Sol). O sistema continuará com o resultado original da Análise Terra para as vagas restantes.");
+              const faltamAg = recommendationCount - aprovadas.length;
+              aprovadas.push(...allStocks.slice(currentIndex, currentIndex + faltamAg));
+              break;
+           }
+        }
+
+        if (auditManager.isEnabled()) {
+           await auditManager.logEvent('LAYER_4', 'REVIEW_COMPLETED', 'ALL', 'Revisão Sol concluída', 0, { 
+             solicitadas: recommendationCount,
+             avaliadas: evaluatedCount,
+             aprovadas: aprovadas.length,
+             ressalvas: ressalvasCount,
+             rejeitadas: rejeitadasLog
+           });
+        }
+
+        result.ranked_stocks = aprovadas;
+      }
+
+      // Sincronização da Base de Conhecimento (Executada APÓS o Sol para não registrar insights de ações rejeitadas)
+      if (result && result.knowledge_base) {
+         try {
+           const { processPostAnalysisKnowledge } = await import('../services/knowledgeBase');
+           
+           const validTickers = result.ranked_stocks.map(s => s.ticker);
+           const validInsights = (result.knowledge_base.new_insights || []).filter((insight: any) => {
+             // O Terra inclui o Ticker na primeira tag do insight
+             const mentionsTicker = insight.tags.find((t: string) => t === t.toUpperCase() && t.length >= 4 && t.length <= 6 && !["VOLUME", "FILTRO"].includes(t));
+             if (mentionsTicker && !validTickers.includes(mentionsTicker)) {
+                return false; // Rejeitado pelo Sol, então descartamos o insight
+             }
+             return true;
+           });
+
+           const syncResult = await processPostAnalysisKnowledge({
+             confirmedIds: result.knowledge_base.confirmed_ids || [],
+             newInsights: validInsights,
+             strategy: 'Smart Money Bottom Fishing'
+           });
+           console.log(`[KnowledgeBase] 🧠 Sincronização Supabase concluída: ${syncResult.confirmedCount} confirmações, ${syncResult.newCount} novos registros salvos.`);
+         } catch (err) {
+           console.warn('[KnowledgeBase] Erro ao sincronizar aprendizado:', err);
+         }
+      }
 
       const endTime = performance.now();
       setPipelineStats({
@@ -446,7 +552,7 @@ export function Dashboard() {
                 }`}
               >
                 <BrainCircuit className="w-3.5 h-3.5" />
-                <span className="hidden lg:inline">Deep IA</span>
+                <span className="hidden lg:inline">Análise Profunda</span>
               </button>
             </div>
 

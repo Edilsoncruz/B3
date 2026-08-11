@@ -9,7 +9,7 @@
  */
 
 import { getCachedStock, getAllCachedStocks, setCachedStock, StockCache, isStockUpToDate } from '../lib/supabase';
-import { selectDynamicUniverse, SelectionParameters, DEFAULT_SELECTION_PARAMS, ScreeningResult } from './universeSelector';
+import { applyDeterministicFilters, B3_FULL_CATALOG, DEFAULT_SELECTION_PARAMS } from './universeSelector';
 import { syncAssetsIncrementally, SyncProgressCallback, IncrementalSyncResult } from './incrementalSync';
 import { getFundamentals, getStockQuote, getStockStats } from './bolsai';
 import { AuditManager } from './auditManager';
@@ -150,18 +150,46 @@ export async function getMarketCandidates(
     cachedMap[item.ticker.toUpperCase()] = item;
   }
 
-  // 2. Etapas 1 & 2: Seleção Inteligente de Ativos a partir do catálogo amplo
-  const customParams = {
-    ...DEFAULT_SELECTION_PARAMS,
-    poolSize,
-    ...(opts.selectionParams || {})
-  };
-
-  const { selectedTickers, screenedResults, totalUniverseCount } = await selectDynamicUniverse(
-    customParams,
+  // 2. Camada 1: Filtros Determinísticos
+  const { eligibleTickers, eliminatedDetails } = await applyDeterministicFilters(
+    B3_FULL_CATALOG,
     cachedMap,
     opts.auditManager
   );
+
+  // 3. Camada 2: Triagem Inteligente com IA (Luna)
+  if (opts.onProgress) {
+    opts.onProgress({ current: 0, total: 100, message: 'Iniciando Triagem Inteligente (Luna)...' });
+  }
+  
+  let selectedTickers: string[] = [];
+  let screenedResults: any[] = [];
+  
+  try {
+    const { triageMarket } = await import('./openai'); // importação dinâmica para não quebrar dependências circulares caso exista
+    const triageResponse = await triageMarket(eligibleTickers, cachedMap, poolSize);
+    
+    // Seleciona as recomendadas pela triagem, com fallback para as N primeiras se faltar campo
+    const ranking = triageResponse.ranking || [];
+    const eligibleFromTriage = ranking.filter(r => r.elegivel_para_analise_profunda !== false);
+    selectedTickers = (eligibleFromTriage.length >= poolSize ? eligibleFromTriage : ranking)
+                        .slice(0, poolSize)
+                        .map(r => r.ticker);
+                        
+    screenedResults = ranking;
+    
+    if (opts.auditManager?.isEnabled()) {
+      await opts.auditManager.logEvent('LAYER_2', 'TRIAGE_COMPLETED', 'ALL', `Luna triou ${eligibleTickers.length} e escolheu ${selectedTickers.length}`, 0, {
+        ranking: ranking
+      });
+    }
+  } catch (err: any) {
+    console.error('Erro na Camada 2 (Luna):', err);
+    if (opts.auditManager?.isEnabled()) {
+      await opts.auditManager.logEvent('LAYER_2', 'TRIAGE_FAILED', 'ALL', `Erro no Luna: ${err.message}`, 1, {});
+    }
+    throw new Error('Falha na Camada 2 (Triagem Inteligente). ' + err.message);
+  }
 
   // 3. Etapas 3 & 4: Atualização Incremental e Gravação no Supabase
   const syncResult: IncrementalSyncResult = await syncAssetsIncrementally(
@@ -175,7 +203,7 @@ export async function getMarketCandidates(
     candidates: syncResult.consolidatedStocks,
     screenedResults,
     syncStats: {
-      totalUniverseCount,
+      totalUniverseCount: B3_FULL_CATALOG.length,
       selectedPoolSize: selectedTickers.length,
       cacheHitCount: syncResult.cacheHitCount,
       apiFetchCount: syncResult.apiFetchCount,

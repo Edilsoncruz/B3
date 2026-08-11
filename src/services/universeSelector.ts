@@ -32,17 +32,6 @@ export const DEFAULT_SELECTION_PARAMS: SelectionParameters = {
   supportWeight: 20
 };
 
-export interface ScreeningResult {
-  ticker: string;
-  score: number;
-  dropPercentage: number;
-  volumeScore: number;
-  fundamentalsScore: number;
-  supportScore: number;
-  reason: string;
-  status?: string;
-}
-
 /**
  * Catálogo Amplo do Mercado Brasileiro (B3)
  * Abrange mais de 400 dos principais ativos negociados em bolsa, cobrindo todos os setores
@@ -95,169 +84,60 @@ export const B3_FULL_CATALOG: string[] = [
   'UNIP6', 'BRKM5', 'DXCO3', 'WIZC3', 'VITT3', 'AURE3', 'SHOW3', 'MOVI3', 'KEPL3', 'SEQL3', 'PORT3', 'LAND3'
 ];
 
-/**
- * Calcula a pontuação preliminar de triagem para um ativo.
- */
-export function calculateScreeningScore(
-  ticker: string,
-  params: SelectionParameters = DEFAULT_SELECTION_PARAMS,
-  stockData?: StockCache | null
-): ScreeningResult {
-  // 1. Queda e Desconto em relação à máxima de 52 semanas
-  let dropPct = 0;
-  if (stockData?.fundamentals?.week_52_high && stockData?.current_price) {
-    const high = stockData.fundamentals.week_52_high;
-    dropPct = Math.max(0, ((high - stockData.current_price) / high) * 100);
-  } else if (stockData?.fundamentals?.daily_change_pct) {
-    // Estimativa por variação
-    dropPct = Math.abs(stockData.fundamentals.daily_change_pct * 3);
-  }
-
-  // Pontuação da Queda (favorece quedas moderadas/altas dentro do intervalo saudável)
-  let dropScore = 50;
-  if (dropPct >= params.minDropPercentage && dropPct <= params.maxDropPercentage) {
-    // Escala linear do desconto ideal (ex: 20% a 50% de queda dá pontuação máxima)
-    if (dropPct >= 20 && dropPct <= 60) {
-      dropScore = 95;
-    } else {
-      dropScore = 75;
-    }
-  } else if (dropPct > params.maxDropPercentage) {
-    dropScore = 20; // Penalidade por risco extremo de ruína
-  } else {
-    dropScore = 40; // Pouca queda / sem margem de reversão
-  }
-
-  // 2. Pontuação Fundamentalista
-  let fundamentalsScore = 60;
-  if (stockData?.fundamentals) {
-    const { pl, roe, pvp } = stockData.fundamentals;
-    let score = 50;
-    
-    // P/L razoável e positivo
-    if (pl && pl > 0 && pl < 25) score += 20;
-    else if (pl && pl <= 0) score -= 15;
-
-    // ROE atrativo (> 10%)
-    if (roe && roe > 10) score += 20;
-    else if (roe && roe > 5) score += 10;
-
-    // P/VP atrativo (< 2.5)
-    if (pvp && pvp > 0 && pvp < 2.5) score += 10;
-
-    fundamentalsScore = Math.max(10, Math.min(100, score));
-  }
-
-  // 3. Pontuação de Suporte & Mínima de 52 semanas
-  let supportScore = 60;
-  if (stockData?.fundamentals?.week_52_low && stockData?.current_price) {
-    const low = stockData.fundamentals.week_52_low;
-    const distFromLow = ((stockData.current_price - low) / low) * 100;
-    // Quanto mais próximo da zona de suporte/fundo sem romper, maior a probabilidade de reversão
-    if (distFromLow >= 0 && distFromLow <= 15) {
-      supportScore = 95;
-    } else if (distFromLow > 15 && distFromLow <= 35) {
-      supportScore = 75;
-    } else {
-      supportScore = 45;
-    }
-  }
-
-  // 4. Pontuação de Volume / Liquidez
-  let volumeScore = 70;
-  if (stockData?.fundamentals?.avg_volume_52w) {
-    const vol = stockData.fundamentals.avg_volume_52w;
-    if (vol > 5_000_000) volumeScore = 95;
-    else if (vol > 1_000_000) volumeScore = 80;
-    else if (vol > 200_000) volumeScore = 60;
-    else volumeScore = 30;
-  }
-
-  // 5. Cálculo Composto Ponderado com base nos pesos configuráveis
-  const totalWeight = params.dropWeight + params.volumeWeight + params.fundamentalsWeight + params.supportWeight;
-  const compositeScore = Math.round(
-    (dropScore * params.dropWeight +
-      volumeScore * params.volumeWeight +
-      fundamentalsScore * params.fundamentalsWeight +
-      supportScore * params.supportWeight) /
-      (totalWeight || 100)
-  );
-
-  let reason = 'Ativo em zona de acumulação com relação risco/retorno favorável.';
-  if (dropScore >= 80 && fundamentalsScore >= 70) {
-    reason = 'Forte desconto com fundamentos sólidos e suporte técnico preservado.';
-  } else if (supportScore >= 85) {
-    reason = 'Alta proximidade de suporte histórico com indícios de reversão.';
-  }
-
-  return {
-    ticker,
-    score: compositeScore,
-    dropPercentage: Number(dropPct.toFixed(2)),
-    volumeScore,
-    fundamentalsScore,
-    supportScore,
-    reason
-  };
+export interface FilterResult {
+  ticker: string;
+  eliminated: boolean;
+  reason?: string;
 }
 
 /**
- * Seleção Inteligente dos Ativos (Etapas 1 & 2):
- * Avalia o catálogo amplo da B3 e retorna os N ativos mais promissores para o pipeline.
+ * CAMADA 1: Filtros Determinísticos
+ * Elimina rapidamente ativos que claramente não deveriam entrar na análise.
+ * Utiliza somente regras objetivas baseadas em dados em cache.
  */
-export async function selectDynamicUniverse(
-  customParams: Partial<SelectionParameters> = {},
+export async function applyDeterministicFilters(
+  catalog: string[],
   existingDataMap: Record<string, StockCache> = {},
   auditManager?: AuditManager
 ): Promise<{
-  selectedTickers: string[];
-  screenedResults: ScreeningResult[];
-  totalUniverseCount: number;
+  eligibleTickers: string[];
+  eliminatedDetails: FilterResult[];
 }> {
-  const params: SelectionParameters = { ...DEFAULT_SELECTION_PARAMS, ...customParams };
-  
-  if (auditManager?.isEnabled()) {
-    await auditManager.logEvent('SELECTION', 'UNIVERSE_LOADED', 'ALL', `Avaliando universo de ${B3_FULL_CATALOG.length} ativos da B3`, 0, {
-      catalog: B3_FULL_CATALOG
-    });
-  }
-  
-  console.log(`\n🧠 [Etapa 1 & 2: Seleção Inteligente] Avaliando universo de ${B3_FULL_CATALOG.length} ativos da B3...`);
-  console.log(`   Critérios: Pool alvo = ${params.poolSize}, Pesos [Queda: ${params.dropWeight}%, Volume: ${params.volumeWeight}%, Fundamentos: ${params.fundamentalsWeight}%, Suporte: ${params.supportWeight}%]`);
+  const eligibleTickers: string[] = [];
+  const eliminatedDetails: FilterResult[] = [];
 
-  // Triagem de todos os ativos do catálogo
-  const evaluatedCandidates: ScreeningResult[] = B3_FULL_CATALOG.map(ticker => {
-    const cachedData = existingDataMap[ticker.toUpperCase()] || null;
-    return calculateScreeningScore(ticker, params, cachedData);
-  });
-
-  // Ordena por score decrescente
-  evaluatedCandidates.sort((a, b) => b.score - a.score);
-
-  // Seleciona os Top N
-  const topSelected = evaluatedCandidates.slice(0, params.poolSize);
-  const selectedTickers = topSelected.map(c => c.ticker);
-
-  // Update status and reason for logging
-  evaluatedCandidates.forEach((c, idx) => {
-    c.status = idx < params.poolSize ? 'SELECIONADA' : 'NÃO SELECIONADA';
-    if (idx >= params.poolSize && !c.reason.includes('score insuficiente')) {
-      c.reason = `Score insuficiente (${c.score}). Apenas os Top ${params.poolSize} foram selecionados. ` + c.reason;
+  for (const ticker of catalog) {
+    const cached = existingDataMap[ticker.toUpperCase()];
+    
+    // Regra 1: Requer dados em cache ou é considerado elegível (para L2/L3 decidirem/baixarem)
+    // Se a estratégia obriga ter dados, podemos eliminar. Vamos manter elegível se não tiver cache
+    // para não ignorar ativos novos. Mas se tiver cache, filtramos.
+    if (!cached) {
+      eligibleTickers.push(ticker);
+      continue;
     }
-  });
+
+    // Regra 2: Preço mínimo (evitar penny stocks extremas)
+    if (cached.current_price > 0 && cached.current_price < 1.0) {
+      eliminatedDetails.push({ ticker, eliminated: true, reason: 'Penny stock (Preço < 1.00)' });
+      continue;
+    }
+
+    // Regra 3: Liquidez Mínima (se disponível)
+    if (cached.fundamentals?.avg_volume_52w !== undefined && cached.fundamentals.avg_volume_52w < 150000) {
+      eliminatedDetails.push({ ticker, eliminated: true, reason: 'Baixa liquidez (Volume médio < 150k)' });
+      continue;
+    }
+
+    eligibleTickers.push(ticker);
+  }
 
   if (auditManager?.isEnabled()) {
-    await auditManager.logAssetEvaluations(evaluatedCandidates);
-    await auditManager.logEvent('SELECTION', 'SELECTION_COMPLETED', 'ALL', `${selectedTickers.length} ações selecionadas dinamicamente`, 0, {
-      topScore: topSelected[0]?.score
+    await auditManager.logEvent('LAYER_1', 'FILTERS_APPLIED', 'ALL', `Filtros aplicados. Elegíveis: ${eligibleTickers.length}. Eliminados: ${eliminatedDetails.length}`, 0, {
+      total: catalog.length,
+      eliminated: eliminatedDetails
     });
   }
 
-  console.log(`   ✨ [Seleção Concluída] ${selectedTickers.length} ações selecionadas dinamicamente (Top Score: ${topSelected[0]?.ticker} com score ${topSelected[0]?.score}).`);
-
-  return {
-    selectedTickers,
-    screenedResults: topSelected,
-    totalUniverseCount: B3_FULL_CATALOG.length
-  };
+  return { eligibleTickers, eliminatedDetails };
 }
