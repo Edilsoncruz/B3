@@ -9,7 +9,7 @@
  */
 
 import { getCachedStock, getAllCachedStocks, setCachedStock, StockCache, isStockUpToDate } from '../lib/supabase';
-import { applyDeterministicFilters, B3_FULL_CATALOG, DEFAULT_SELECTION_PARAMS } from './universeSelector';
+import { applyDeterministicFilters, applyRecoveryPreFilter, B3_FULL_CATALOG, DEFAULT_SELECTION_PARAMS } from './universeSelector';
 import { syncAssetsIncrementally, SyncProgressCallback, IncrementalSyncResult } from './incrementalSync';
 import { getFundamentals, getStockQuote, getStockStats } from './bolsai';
 import { AuditManager } from './auditManager';
@@ -33,6 +33,7 @@ export interface MarketScanOptions {
   onProgress?: SyncProgressCallback;
   forceRefresh?: boolean;
   auditManager?: AuditManager;
+  maxPrice?: number;
 }
 
 /**
@@ -140,48 +141,120 @@ export async function getMarketCandidates(
   }
 
   // =========================================================================
-  // MODO 2: Varredura Geral Inteligente de Mercado (5 Etapas)
+  // MODO 2: Varredura Geral Inteligente de Mercado
   // =========================================================================
 
-  // 1. Carrega dados pré-existentes do Supabase para otimização do screening
+  // Etapa A: Carrega dados pré-existentes do Supabase para o filtro L1
   const allCached = await getAllCachedStocks();
   const cachedMap: Record<string, StockCache> = {};
   for (const item of allCached) {
     cachedMap[item.ticker.toUpperCase()] = item;
   }
 
-  // 2. Camada 1: Filtros Determinísticos
+  // Etapa B: Camada 1 — Filtros Determinísticos (usa cache para eliminação rápida)
   const { eligibleTickers, eliminatedDetails } = await applyDeterministicFilters(
     B3_FULL_CATALOG,
     cachedMap,
+    opts.auditManager,
+    opts.maxPrice
+  );
+
+  // Etapa C: Sync Incremental dos elegíveis ANTES da Luna
+  // Garante que a Luna e a Camada 1.5 sempre trabalhem com dados frescos.
+  // O Supabase funciona como cache: se o dado for recente (<12h), ZERO chamadas à Unibolsa.
+  // Se o Supabase estiver vazio ou desatualizado, busca os dados na Unibolsa e salva no banco.
+  console.log(`\n🔄 [Sync Pré-Luna] Atualizando dados para ${eligibleTickers.length} elegíveis...`);
+  if (opts.onProgress) {
+    opts.onProgress({ current: 0, total: eligibleTickers.length, message: `Sincronizando ${eligibleTickers.length} ativos elegíveis (cache Supabase ou Unibolsa)...` });
+  }
+
+  const preLunaSync: IncrementalSyncResult = await syncAssetsIncrementally(
+    eligibleTickers,
+    opts.onProgress ? (p) => {
+      opts.onProgress!({ ...p, message: `Sync pré-triagem: ${p.message}` });
+    } : undefined,
+    opts.forceRefresh ? 0 : 12,
     opts.auditManager
   );
 
-  // 3. Camada 2: Triagem Inteligente com IA (Luna)
-  if (opts.onProgress) {
-    opts.onProgress({ current: 0, total: 100, message: 'Iniciando Triagem Inteligente (Luna)...' });
+  // Monta mapa de dados frescos a partir do sync
+  const freshDataMap: Record<string, StockCache> = {};
+  for (const stock of preLunaSync.consolidatedStocks) {
+    freshDataMap[stock.ticker.toUpperCase()] = stock;
   }
-  
+
+  // Etapa D: Camada 1.5 — Pré-filtro QUEDA + RECUPERAÇÃO com dados frescos
+  const { fallCandidates, excludedFromTriage, stats: preFilterStats } = applyRecoveryPreFilter(
+    eligibleTickers,
+    freshDataMap
+  );
+
+  // Segurança: se nenhuma candidata passou (ex: mercado todo em alta), usa todos os elegíveis
+  let lunaInputTickers = fallCandidates.length > 0 ? fallCandidates : eligibleTickers;
+
+  // Filtro de Preço Máximo sobre dados frescos
+  if (opts.maxPrice) {
+    const maxPriceLimit = opts.maxPrice;
+    lunaInputTickers = lunaInputTickers.filter(ticker => {
+      const price = freshDataMap[ticker]?.current_price;
+      if (price && price > maxPriceLimit) {
+        console.log(`  [Preço Máximo] ${ticker} eliminado: R$ ${price.toFixed(2)} > R$ ${maxPriceLimit}`);
+        return false;
+      }
+      return true;
+    });
+    console.log(`  [Preço Máximo] Corte R$ ${maxPriceLimit}: ${lunaInputTickers.length} candidatas restantes.`);
+  }
+
+  if (opts.auditManager?.isEnabled()) {
+    await opts.auditManager.logEvent('LAYER_1_5', 'RECOVERY_PREFILTER_APPLIED', 'ALL',
+      `Camada 1.5: ${eligibleTickers.length} elegíveis → ${preFilterStats.falling} em queda → ${preFilterStats.recovering} com recuperação → ${lunaInputTickers.length} candidatas para Luna${fallCandidates.length === 0 ? ' (fallback: mercado sem candidatas, enviando todos)' : ''}`,
+      0,
+      {
+        totalEligible: eligibleTickers.length,
+        freshDataCount: Object.keys(freshDataMap).length,
+        falling: preFilterStats.falling,
+        recovering: preFilterStats.recovering,
+        stable: preFilterStats.stable,
+        rising: preFilterStats.rising,
+        noCacheData: preFilterStats.noCacheData,
+        fallCandidates: lunaInputTickers,
+        excluded: excludedFromTriage,
+        usedFallback: fallCandidates.length === 0,
+        preSyncStats: {
+          cacheHits: preLunaSync.cacheHitCount,
+          apiFetches: preLunaSync.apiFetchCount,
+          failed: preLunaSync.failedCount
+        }
+      }
+    );
+  }
+
+  // Etapa E: Camada 2 — Triagem Inteligente (Luna) com dados frescos
+  if (opts.onProgress) {
+    opts.onProgress({ current: 0, total: 100, message: `Triagem Inteligente (Luna): avaliando ${lunaInputTickers.length} candidatas QUEDA+RECUPERAÇÃO...` });
+  }
+
   let selectedTickers: string[] = [];
   let screenedResults: any[] = [];
-  
+
   try {
-    const { triageMarket } = await import('./openai'); // importação dinâmica para não quebrar dependências circulares caso exista
-    const triageResponse = await triageMarket(eligibleTickers, cachedMap, poolSize);
-    
-    // Seleciona as recomendadas pela triagem, com fallback para as N primeiras se faltar campo
+    const { triageMarket } = await import('./openai');
+    const triageResponse = await triageMarket(lunaInputTickers, freshDataMap);
+
     const ranking = triageResponse.ranking || [];
     const eligibleFromTriage = ranking.filter(r => r.elegivel_para_analise_profunda !== false);
-    selectedTickers = (eligibleFromTriage.length >= poolSize ? eligibleFromTriage : ranking)
-                        .slice(0, poolSize)
-                        .map(r => r.ticker);
-                        
+    selectedTickers = (eligibleFromTriage.length > 0 ? eligibleFromTriage : ranking).map(r => r.ticker);
+
     screenedResults = ranking;
-    
+
     if (opts.auditManager?.isEnabled()) {
-      await opts.auditManager.logEvent('LAYER_2', 'TRIAGE_COMPLETED', 'ALL', `Luna triou ${eligibleTickers.length} e escolheu ${selectedTickers.length}`, 0, {
-        ranking: ranking
-      });
+      await opts.auditManager.logEvent('LAYER_2', 'TRIAGE_COMPLETED', 'ALL',
+        `Luna avaliou ${lunaInputTickers.length} candidatas e selecionou ${selectedTickers.length} para análise profunda (Terra)`,
+        0,
+        { ranking }
+      );
+      await opts.auditManager.logAssetEvaluations(ranking);
     }
   } catch (err: any) {
     console.error('Erro na Camada 2 (Luna):', err);
@@ -191,23 +264,26 @@ export async function getMarketCandidates(
     throw new Error('Falha na Camada 2 (Triagem Inteligente). ' + err.message);
   }
 
-  // 3. Etapas 3 & 4: Atualização Incremental e Gravação no Supabase
-  const syncResult: IncrementalSyncResult = await syncAssetsIncrementally(
-    selectedTickers,
-    opts.onProgress,
-    opts.forceRefresh ? 0 : 12,
-    opts.auditManager
-  );
+  // Etapa F: Monta o conjunto final de candidatas para a Terra
+  // Os dados já estão frescos (sincronizados na Etapa C). Apenas extrai do freshDataMap.
+  const finalCandidates: StockCache[] = selectedTickers
+    .map(t => freshDataMap[t.toUpperCase()])
+    .filter((s): s is StockCache => !!s);
 
   return {
-    candidates: syncResult.consolidatedStocks,
+    candidates: finalCandidates,
     screenedResults,
     syncStats: {
       totalUniverseCount: B3_FULL_CATALOG.length,
+      eligibleLayer1Count: eligibleTickers.length,
+      fallingCount: preFilterStats.falling,
+      recoveringCount: preFilterStats.recovering,
+      lunaInputCount: lunaInputTickers.length,
       selectedPoolSize: selectedTickers.length,
-      cacheHitCount: syncResult.cacheHitCount,
-      apiFetchCount: syncResult.apiFetchCount,
-      failedCount: syncResult.failedCount
+      cacheHitCount: preLunaSync.cacheHitCount,
+      apiFetchCount: preLunaSync.apiFetchCount,
+      failedCount: preLunaSync.failedCount
     }
   };
 }
+

@@ -103,13 +103,14 @@ export class AuditManager {
         audit_id: this.auditId,
         ticker: e.ticker,
         rank_position: index + 1,
-        drop_score: e.dropScore || 0,
-        volume_score: e.volumeScore || 0,
-        fundamentals_score: e.fundamentalsScore || 0,
-        support_score: e.supportScore || 0,
         composite_score: e.score,
-        status: e.status,
-        rejection_reason: e.reason || null
+        status: e.status || (e.elegivel_para_analise_profunda ? 'ELEGIBLE' : 'REJECTED'),
+        rejection_reason: e.motivo_selecao || null,
+        metadata: {
+          criterios_selecionados: e.criterios_selecionados,
+          motivo_selecao: e.motivo_selecao,
+          nivel_confianca: e.nivel_de_confianca
+        }
       }));
       
       // Batch insert in chunks if needed (Supabase has limit around 1000)
@@ -157,9 +158,12 @@ export class AuditManager {
         strategy_score: r.strategy_score,
         risk_reward_ratio: r.risk_reward_ratio,
         estimated_timeframe: r.estimated_timeframe,
+        estimated_target_date: r.estimated_target_date,
         approved_criteria: r.approved_criteria || [],
         rejected_criteria: r.rejected_criteria || [],
-        analysis_text: r.analysis
+        analysis_text: r.analysis,
+        status: r.status || (r.action === 'REJECT' ? 'REJECTED' : 'SELECIONADA'),
+        rejection_reason: r.rejection_reasons ? r.rejection_reasons.join(" | ") : (r.reason || null)
       }));
       
       for (let i = 0; i < records.length; i += 100) {

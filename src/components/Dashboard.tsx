@@ -10,13 +10,14 @@ import { analyzeMarket, AIRecommendation } from '../services/openai';
 import { getMarketCandidates, MarketCandidatesResult } from '../services/marketData';
 import { StockCard } from "./StockCard";
 import { calculatePortfolioDistribution } from "../utils/portfolio";
-import { DEFAULT_SELECTION_PARAMS, SelectionParameters } from "../services/universeSelector";
+import { DEFAULT_SELECTION_PARAMS, SelectionParameters, B3_FULL_CATALOG } from "../services/universeSelector";
 import { KnowledgeBaseDrawer } from "./KnowledgeBaseDrawer";
 import { saveAnalyzedStocks, getHistoricalIndications } from "../lib/supabase";
 import { verifyOpenOperations } from "../services/operationsManager";
 import { AuditManager } from "../services/auditManager";
 import { generateAuditPDF } from "../utils/AuditPDFGenerator";
 import { HistoryTab } from "./HistoryTab";
+import { UnibolsaTab } from "./UnibolsaTab";
 
 export function Dashboard() {
   const [loading, setLoading] = useState(false);
@@ -34,17 +35,15 @@ export function Dashboard() {
   const [targetPeriodValue, setTargetPeriodValue] = useState(2);
   const [targetPeriodUnit, setTargetPeriodUnit] = useState("meses");
   
-  // Controle de Parâmetros de Seleção (Etapa 2)
   const [showFilters, setShowFilters] = useState(false);
-  const [poolSize, setPoolSize] = useState(50);
-  const [selectionParams, setSelectionParams] = useState<SelectionParameters>(DEFAULT_SELECTION_PARAMS);
+  const [maxPrice, setMaxPrice] = useState<number | ''>('');
 
   // Audit Mode
   const [isAuditMode, setIsAuditMode] = useState(false);
   const [lastAuditId, setLastAuditId] = useState<string | null>(null);
 
   // Tab State
-  const [activeTab, setActiveTab] = useState<'ANALISE' | 'HISTORICO'>('ANALISE');
+  const [activeTab, setActiveTab] = useState<'ANALISE' | 'HISTORICO' | 'UNIBOLSAI'>('ANALISE');
 
   // Controle do Drawer da Base de Conhecimento
   const [isKnowledgeDrawerOpen, setIsKnowledgeDrawerOpen] = useState(false);
@@ -92,11 +91,11 @@ export function Dashboard() {
           strategy: 'Smart Money Bottom Fishing',
           strategyVersion: '1.0',
           analysisMode: specificTicker.trim() ? 'Ticker Específico' : 'Varredura Dinâmica',
-          poolSize: specificTicker.trim() ? 1 : poolSize,
+          poolSize: specificTicker.trim() ? 1 : B3_FULL_CATALOG.length,
           recommendationCount,
           targetPeriodValue,
           targetPeriodUnit,
-          selectionParams
+          selectionParams: DEFAULT_SELECTION_PARAMS
         });
       }
 
@@ -105,12 +104,8 @@ export function Dashboard() {
       setProgressMsg("Etapa 1 & 2: Mapeando universo amplo da B3 e executando Seleção Inteligente...");
 
       const candidatesResult: MarketCandidatesResult = await getMarketCandidates({
-        poolSize: specificTicker.trim() ? 1 : poolSize,
         specificTicker: specificTicker.trim() || undefined,
-        selectionParams: {
-          ...selectionParams,
-          poolSize: specificTicker.trim() ? 1 : poolSize
-        },
+        maxPrice: maxPrice ? Number(maxPrice) : undefined,
         auditManager,
         onProgress: (p) => {
           setCurrentStep(3);
@@ -275,14 +270,31 @@ export function Dashboard() {
         });
 
         if (auditManager.isEnabled()) {
-          await auditManager.logResults(result.ranked_stocks);
-          await auditManager.finishRun({
-            totalExecutionTimeMs: Math.round(endTime - startTime),
-            totalTokens: result.token_usage?.total_tokens || 0,
-            promptTokens: result.token_usage?.prompt_tokens || 0,
-            responseTokens: result.token_usage?.completion_tokens || 0
-          });
+          try {
+            await auditManager.logResults(result.ranked_stocks);
+            await auditManager.finishRun({
+              totalExecutionTimeMs: Math.round(endTime - startTime),
+              totalTokens: result.token_usage?.total_tokens || 0,
+              promptTokens: result.token_usage?.prompt_tokens || 0,
+              responseTokens: result.token_usage?.completion_tokens || 0
+            });
+          } catch(e) {}
         }
+        if (!result.ranked_stocks || result.ranked_stocks.filter((s:any) => s.status !== "REJECTED").length === 0) {
+          setError("Não foram encontradas oportunidades que atendam simultaneamente a todos os critérios atuais.");
+        }
+      } else {
+        if (auditManager.isEnabled()) {
+          try {
+            await auditManager.finishRun({
+              totalExecutionTimeMs: Math.round(endTime - startTime),
+              totalTokens: 0,
+              promptTokens: 0,
+              responseTokens: 0
+            });
+          } catch(e) {}
+        }
+        setError("Não foram encontradas oportunidades que atendam simultaneamente a todos os critérios atuais.");
       }
 
       setData(result);
@@ -430,44 +442,7 @@ export function Dashboard() {
               />
             </div>
 
-            {/* Qtd Recomendações */}
-            <div className="relative hidden md:block">
-              <input 
-                type="number"
-                min="1"
-                max="20"
-                value={recommendationCount}
-                onChange={(e) => setRecommendationCount(parseInt(e.target.value) || 5)}
-                className="rounded-full py-1.5 px-3 text-sm focus:outline-none w-14 transition-all border bg-[#151619] border-[#2a2b2f] text-white focus:border-emerald-500/50 text-center"
-              />
-              <span className="absolute -top-4 left-1 text-[8px] uppercase tracking-widest text-[#8E9299]">Qtd Rec.</span>
-            </div>
-
-            {/* Target Period */}
-            <div className="relative hidden md:flex items-center">
-              <input 
-                type="number"
-                min="1"
-                max="365"
-                value={targetPeriodValue}
-                onChange={(e) => setTargetPeriodValue(parseInt(e.target.value) || 2)}
-                className="rounded-l-full py-1.5 pl-3 pr-1 text-sm focus:outline-none w-12 transition-all border-y border-l border-r-0 bg-[#151619] border-[#2a2b2f] text-white focus:border-emerald-500/50 text-center"
-              />
-              <select
-                value={targetPeriodUnit}
-                onChange={(e) => setTargetPeriodUnit(e.target.value)}
-                className="appearance-none rounded-r-full py-1.5 pl-1 pr-5 text-sm focus:outline-none w-20 transition-all border-y border-r border-l-0 cursor-pointer bg-[#151619] border-[#2a2b2f] text-white focus:border-emerald-500/50"
-              >
-                <option value="dias">Dias</option>
-                <option value="semanas">Semanas</option>
-                <option value="meses">Meses</option>
-              </select>
-              <ChevronDown className="w-3 h-3 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none text-[#8E9299]" />
-              <span className="absolute -top-4 left-1 text-[8px] uppercase tracking-widest whitespace-nowrap text-[#8E9299]">Tempo Alvo</span>
-            </div>
-
-            {/* Separador visual */}
-            <div className="hidden md:block w-px h-5 bg-[#2a2b2f]" />
+            {/* Header Tooling Movidos para a seção de Critérios */}
 
             {/* Grupo 2: Modos especiais agrupados — M07 */}
             <div className="flex items-center gap-1.5 px-2 py-1 rounded-full border border-[#2a2b2f] bg-[#0d0d0f]">
@@ -581,6 +556,13 @@ export function Dashboard() {
           >
             Histórico
           </button>
+          <button
+            onClick={() => setActiveTab('UNIBOLSAI')}
+            className={`pb-2 border-b-2 font-semibold text-sm transition-colors cursor-pointer flex items-center gap-2 ${activeTab === 'UNIBOLSAI' ? 'border-purple-500 text-purple-400' : 'border-transparent text-[#8E9299] hover:text-white'}`}
+          >
+            <Activity className="w-4 h-4" />
+            Unibolsa API (RAW)
+          </button>
         </div>
       </header>
 
@@ -610,70 +592,61 @@ export function Dashboard() {
                 <span className="text-[10px] text-gray-400 font-mono">Universo: ~1.000 ativos da B3</span>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 pt-1">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
                 <div className="p-2.5 rounded-lg bg-[#0a0a0a] border border-[#2a2b2f]">
-                  <label className="text-[10px] uppercase text-[#8E9299] block mb-1">Pool Monitorado</label>
+                  <label className="text-[10px] uppercase text-[#8E9299] block mb-1">Qtd. Recomendada</label>
                   <input 
                     type="number" 
-                    min="10" 
-                    max="100" 
-                    value={poolSize} 
-                    onChange={(e) => setPoolSize(parseInt(e.target.value) || 50)}
+                    min="1" 
+                    max="20" 
+                    value={recommendationCount} 
+                    onChange={(e) => setRecommendationCount(parseInt(e.target.value) || 5)}
                     className="w-full bg-transparent font-mono font-bold text-sm text-white focus:outline-none"
                   />
-                  <span className="text-[9px] text-[#8E9299]">ativos selecionados</span>
+                  <span className="text-[9px] text-[#8E9299]">ativos na seleção final</span>
                 </div>
 
                 <div className="p-2.5 rounded-lg bg-[#0a0a0a] border border-[#2a2b2f]">
-                  <label className="text-[10px] uppercase text-[#8E9299] block mb-1">Peso Queda (%)</label>
-                  <input 
-                    type="number" 
-                    min="0" 
-                    max="100" 
-                    value={selectionParams.dropWeight} 
-                    onChange={(e) => setSelectionParams({ ...selectionParams, dropWeight: parseInt(e.target.value) || 0 })}
-                    className="w-full bg-transparent font-mono font-bold text-sm text-emerald-400 focus:outline-none"
-                  />
-                  <span className="text-[9px] text-[#8E9299]">desconto 52 sem.</span>
+                  <label className="text-[10px] uppercase text-[#8E9299] block mb-1">Preço Máximo</label>
+                  <div className="flex items-center">
+                    <span className="text-sm font-mono text-[#8E9299] mr-1">R$</span>
+                    <input 
+                      type="number" 
+                      min="0" 
+                      step="0.01"
+                      value={maxPrice} 
+                      onChange={(e) => setMaxPrice(e.target.value ? parseFloat(e.target.value) : '')}
+                      placeholder="Ilimitado"
+                      className="w-full bg-transparent font-mono font-bold text-sm text-emerald-400 focus:outline-none"
+                    />
+                  </div>
+                  <span className="text-[9px] text-[#8E9299]">filtro de elegibilidade</span>
                 </div>
 
                 <div className="p-2.5 rounded-lg bg-[#0a0a0a] border border-[#2a2b2f]">
-                  <label className="text-[10px] uppercase text-[#8E9299] block mb-1">Peso Volume (%)</label>
-                  <input 
-                    type="number" 
-                    min="0" 
-                    max="100" 
-                    value={selectionParams.volumeWeight} 
-                    onChange={(e) => setSelectionParams({ ...selectionParams, volumeWeight: parseInt(e.target.value) || 0 })}
-                    className="w-full bg-transparent font-mono font-bold text-sm text-blue-400 focus:outline-none"
-                  />
-                  <span className="text-[9px] text-[#8E9299]">fluxo institucional</span>
-                </div>
-
-                <div className="p-2.5 rounded-lg bg-[#0a0a0a] border border-[#2a2b2f]">
-                  <label className="text-[10px] uppercase text-[#8E9299] block mb-1">Peso Fundamentos (%)</label>
-                  <input 
-                    type="number" 
-                    min="0" 
-                    max="100" 
-                    value={selectionParams.fundamentalsWeight} 
-                    onChange={(e) => setSelectionParams({ ...selectionParams, fundamentalsWeight: parseInt(e.target.value) || 0 })}
-                    className="w-full bg-transparent font-mono font-bold text-sm text-purple-400 focus:outline-none"
-                  />
-                  <span className="text-[9px] text-[#8E9299]">P/L, ROE, P/VP</span>
-                </div>
-
-                <div className="p-2.5 rounded-lg bg-[#0a0a0a] border border-[#2a2b2f]">
-                  <label className="text-[10px] uppercase text-[#8E9299] block mb-1">Peso Suporte (%)</label>
-                  <input 
-                    type="number" 
-                    min="0" 
-                    max="100" 
-                    value={selectionParams.supportWeight} 
-                    onChange={(e) => setSelectionParams({ ...selectionParams, supportWeight: parseInt(e.target.value) || 0 })}
-                    className="w-full bg-transparent font-mono font-bold text-sm text-amber-400 focus:outline-none"
-                  />
-                  <span className="text-[9px] text-[#8E9299]">proximidade mínimas</span>
+                  <label className="text-[10px] uppercase text-[#8E9299] block mb-1">Tempo Alvo</label>
+                  <div className="flex items-center">
+                    <input 
+                      type="number"
+                      min="1"
+                      max="365"
+                      value={targetPeriodValue}
+                      onChange={(e) => setTargetPeriodValue(parseInt(e.target.value) || 2)}
+                      disabled={targetPeriodUnit === "dinâmico"}
+                      className={`bg-transparent font-mono font-bold text-sm text-white focus:outline-none w-10 text-center ${targetPeriodUnit === "dinâmico" ? "opacity-30" : ""}`}
+                    />
+                    <select
+                      value={targetPeriodUnit}
+                      onChange={(e) => setTargetPeriodUnit(e.target.value)}
+                      className="bg-transparent font-mono font-bold text-sm text-blue-400 focus:outline-none w-full cursor-pointer ml-1"
+                    >
+                      <option value="dias">Dias</option>
+                      <option value="semanas">Semanas</option>
+                      <option value="meses">Meses</option>
+                      <option value="dinâmico">Dinâmico</option>
+                    </select>
+                  </div>
+                  <span className="text-[9px] text-[#8E9299]">horizonte da análise</span>
                 </div>
               </div>
             </div>
@@ -754,6 +727,8 @@ export function Dashboard() {
       {/* Main Content */}
       {activeTab === 'HISTORICO' ? (
         <HistoryTab />
+      ) : activeTab === 'UNIBOLSAI' ? (
+        <UnibolsaTab />
       ) : (
       <main className="max-w-6xl mx-auto px-6 py-10">
         {/* Empty State */}
@@ -795,24 +770,24 @@ export function Dashboard() {
               </div>
             </div>
 
-            <div className="flex flex-col items-center gap-4">
-              <button
-                onClick={handleAnalyze}
-                className="flex items-center gap-2.5 px-8 py-3.5 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-sm shadow-lg shadow-emerald-500/20 transition-all cursor-pointer"
-              >
-                <Search className="w-4 h-4" />
-                Iniciar Varredura Inteligente (Top {poolSize} Ações)
-              </button>
-
-              {lastAuditId && isAuditMode && !loading && !error && (
+              <div className="flex flex-col items-center gap-4">
                 <button
-                  onClick={() => generateAuditPDF(lastAuditId)}
-                  className="flex items-center gap-2 px-6 py-2 rounded-full bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-lg transition-all cursor-pointer mt-2"
+                  onClick={handleAnalyze}
+                  className="flex items-center gap-2.5 px-8 py-3.5 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-sm shadow-lg shadow-emerald-500/20 transition-all cursor-pointer"
                 >
-                  <Download className="w-4 h-4" />
-                  Gerar Relatório de Auditoria PDF
+                  <Search className="w-4 h-4" />
+                  Iniciar Varredura Inteligente (Universo Completo)
                 </button>
-              )}
+
+                {lastAuditId && isAuditMode && !loading && (
+                  <button
+                    onClick={() => generateAuditPDF(lastAuditId)}
+                    className="flex items-center gap-2 px-6 py-2 rounded-full bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-lg transition-all cursor-pointer mt-2"
+                  >
+                    <Download className="w-4 h-4" />
+                    Gerar Relatório de Auditoria PDF
+                  </button>
+                )}
 
               <div className="flex flex-wrap justify-center items-center gap-2 mt-2">
                 <span className="text-xs text-[#8E9299] mr-1">Atalhos rápidos:</span>
@@ -880,8 +855,26 @@ export function Dashboard() {
 
         {/* Results */}
         {data && !loading && (() => {
-          const simulationResult = isSimulationEnabled && data.ranked_stocks
-            ? calculatePortfolioDistribution(data.ranked_stocks, investmentAmount, { forceEqualInclusion })
+          const approvedStocks = data.ranked_stocks ? data.ranked_stocks.filter((s: any) => s.status !== "REJECTED") : [];
+          
+          if (approvedStocks.length === 0) {
+            return (
+              <motion.div 
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-6 flex items-start gap-4 max-w-2xl mx-auto"
+              >
+                <AlertCircle className="w-6 h-6 text-yellow-400 shrink-0 mt-0.5" />
+                <div>
+                  <h3 className="text-yellow-400 font-medium mb-1">Nenhuma Oportunidade Encontrada</h3>
+                  <p className="text-yellow-400/80 text-sm">Não foram encontradas oportunidades que atendam simultaneamente a todos os critérios atuais após a análise profunda.</p>
+                </div>
+              </motion.div>
+            );
+          }
+
+          const simulationResult = isSimulationEnabled && approvedStocks.length > 0
+            ? calculatePortfolioDistribution(approvedStocks, investmentAmount, { forceEqualInclusion })
             : null;
 
           return (
@@ -1089,7 +1082,7 @@ export function Dashboard() {
               </div>
               
               <div className="space-y-4">
-                {data.ranked_stocks.map((stock, index) => (
+                {approvedStocks.map((stock: any, index: number) => (
                   <StockCard 
                     key={stock.ticker} 
                     stock={stock} 

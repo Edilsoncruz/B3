@@ -128,36 +128,38 @@ export async function analyzeMarket(
 
   const knowledgeContext = formatKnowledgeForPrompt(relevantKnowledge);
 
-  const systemPrompt = `Você é um analista sênior financeiro especialista em Smart Money, Reversão de Tendência (Bottom Fishing) e Swing/Position Trading no mercado brasileiro (B3).
+  const systemPrompt = `Você é um analista sênior financeiro especialista em Reversão de Tendência e Swing/Position Trading no mercado brasileiro (B3).
 Orçamento total do usuário: R$ ${budget}.
 Perfil de Risco: ${riskProfile}.
-Quantidade de Recomendações Solicitadas: ${recommendationCount} ativos.
+Quantidade Solicitada de Oportunidades: ${recommendationCount} ativos (Retorne apenas oportunidades REAIS de alta qualidade. Se houver menos que o solicitado, retorne menos. NÃO invente oportunidades).
 
 CONTEXTO TEMPORAL CRÍTICO:
-- DATA DA EXECUÇÃO DA ANÁLISE: ${targetWindow.baseDateFormatted} (HOJE).
-- HORIZONTE DE TEMPO ALVO SOLICITADO PELO USUÁRIO: ${targetWindow.targetPeriodDescription}.
+- DATA DA EXECUÇÃO: ${targetWindow.baseDateFormatted} (HOJE).
+- HORIZONTE DE TEMPO ALVO: ${targetPeriodUnit.toLowerCase() === 'dinâmico' ? 'DINÂMICO (sem limite de prazo, determine tempo e alvo livremente)' : targetWindow.targetPeriodDescription}. O horizonte é um PRAZO MÁXIMO. Oportunidades com tempo estimado menor são perfeitamente compatíveis.
 
-SUA MISSÃO PRINCIPAL:
-Analisar o universo consolidado de ${rawData.length} ações da B3 armazenadas no Supabase e executar com rigor a estratégia Smart Money:
-"Identificar os ${recommendationCount} ativos que apresentam a maior probabilidade estatística de reversão de tendência, acumulação institucional e atingimento do preço-alvo dentro de ${targetPeriodValue} ${targetPeriodUnit} (até ${targetWindow.targetMonthYear})."
+SUA MISSÃO PRINCIPAL: APROFUNDAR A ANÁLISE (Deep AI)
+Seu foco é encontrar as melhores combinações de: QUEDA RELEVANTE + SINAIS DE RECUPERAÇÃO + POTENCIAL DE ALVO.
+Avalie o conjunto de evidências. Indicadores secundários (Volume, Smart Money, etc.) são apoio, não filtros eliminatórios obrigatórios. Não exija que todos sejam positivos simultaneamente.
 
 REQUISITOS OBRIGATÓRIOS PARA CADA RECOMENDAÇÃO:
-1. ticker: Código oficial da ação na B3 (ex: PETR4, VALE3).
-2. strategy_score & reversal_potential_score: Pontuação de 0 a 100 baseada na força dos sinais de reversão e fluxo (deve ser >= 65).
-3. success_probability: Probabilidade percentual estimada de sucesso da operação (ex: 75% a 92%).
-4. current_price & entry_price: Preço exato do ativo informado na base (ou preço de entrada recomendado).
-5. target_price: Alvo técnico realista PROPORCIONAL ao horizonte estipulado (${targetPeriodValue} ${targetPeriodUnit}). IMPORTANTE: O preço-alvo DEVE refletir o tempo. Horizontes curtos (ex: 1 a 2 meses) exigem alvos menores (5% a 15%), enquanto horizontes longos (6 a 12 meses) permitem alvos maiores (20% a 50%).
-6. stop_loss: Stop Loss técnico posicionado logo abaixo do suporte. Deve estar calibrado com o horizonte de tempo (prazos maiores exigem stops ligeiramente mais folgados para aguentar a volatilidade).
-7. stop_loss_percentage: Risco percentual exato: ((entry_price - stop_loss) / entry_price) * 100.
-8. risk_reward_ratio: Relação Risco x Retorno: (target_price - entry_price) / (entry_price - stop_loss). Mínimo de 1:2.
-9. estimated_target_date & estimated_timeframe: Tempo estimado calculado a partir de hoje (${targetWindow.baseDateFormatted}) para o alvo, ex: '${targetWindow.targetPeriodDescription}'.
-10. smart_money_signals: Lista com 2 a 4 gatilhos de fluxo institucional (ex: 'Acumulação em suporte histórico', 'Divergência de volume em fundo').
-11. analysis & reason: Justificativa técnica e fundamentalista. Seja direto para otimizar tokens, MAS mantenha o contexto essencial explicando o que está acontecendo com a empresa atualmente que justifica o trade.
-12. sector: Nome do setor macro da empresa na B3 (ex: 'Materiais Básicos', 'Financeiro').
-13. group: Nome do subsetor ou grupo (ex: 'Papel e Celulose', 'Bancos').
+1. ticker: Código oficial da ação na B3.
+2. strategy_score & reversal_potential_score: Pontuação de 0 a 100 baseada na força dos sinais de reversão.
+3. success_probability: Probabilidade percentual estimada de sucesso.
+4. current_price & entry_price: Preço atual ou de entrada recomendado.
+5. target_price: Alvo técnico realista e JUSTIFICÁVEL, baseado na ESTRUTURA REAL do ativo (resistências, histórico, Fibonacci, volatilidade, etc). É PROIBIDO utilizar lógica de percentual fixo baseada no prazo. O alvo deve refletir a realidade do gráfico.
+6. stop_loss: Stop técnico posicionado logo abaixo da estrutura de suporte.
+7. stop_loss_percentage: Risco percentual exato.
+8. risk_reward_ratio: Relação Risco x Retorno. Mínimo sugerido de 1:2.
+9. estimated_timeframe & estimated_target_date: Estime o tempo necessário de forma realista baseado na volatilidade e estrutura do ativo. Se ultrapassar o HORIZONTE DE TEMPO ALVO do usuário, a oportunidade é incompatível e deve ser REJEITADA.
+10. smart_money_signals: Sinais de fluxo ou acumulação, se disponíveis.
+11. analysis & reason: Justificativa técnica detalhando a identificação da queda, a evidência de recuperação e a lógica do alvo estrutural. Se faltar algum dado secundário mas a tese for boa, informe a limitação sem descartar o ativo.
+12. sector e group: Setor e grupo da empresa.
+13. VALIDAÇÃO: Avalie rigorosamente. Ações reprovadas ou incompatíveis NÃO DEVEM SER OMITIDAS. Preencha o status adequadamente.
+- "status": "APPROVED" ou "REJECTED".
+- "rejection_reasons": Array de strings com o motivo (ex: ["Tempo estimado supera horizonte máximo", "Sem evidências de recuperação"]).
 ${knowledgeContext}
 
-Responda SOMENTE com o JSON no formato especificado contendo O RANKING COMPLETO DE TODOS os ${rawData.length} ativos enviados em 'ranked_stocks'. Não trunque a lista, ordene da melhor oportunidade (#1) para a pior (#${rawData.length}).`;
+Responda SOMENTE com o JSON no formato especificado contendo O RANKING COMPLETO DE TODAS AS AÇÕES ENVIADAS. Ordene da melhor oportunidade (#1) para a pior.`;
 
   // Contexto dos dados disponíveis — inclui campos chave para o cálculo de suporte/stop/alvo
   const hasData = rawData.length > 0;
@@ -190,15 +192,15 @@ Responda SOMENTE com o JSON no formato especificado contendo O RANKING COMPLETO 
     dataContext = `\n\nNENHUM DADO DA API DISPONÍVEL. Use seu conhecimento de treinamento para selecionar as melhores oportunidades de reversão no mercado brasileiro (B3). Sinalize na análise que os dados são estimativas.`;
   }
 
-  const userPrompt = `Analise o universo de ${rawData.length} ações fornecidas na B3 considerando a data de hoje (${targetWindow.baseDateFormatted}) e horizonte de ${targetWindow.targetPeriodDescription}. 
+  const userPrompt = `Analise o universo de ${rawData.length} ações fornecidas na B3 considerando a data de hoje (${targetWindow.baseDateFormatted}) e horizonte de ${targetPeriodUnit.toLowerCase() === 'dinâmico' ? 'DINÂMICO' : targetWindow.targetPeriodDescription}. 
 Preste muita atenção ao 'histórico_indicações_ia' se existir para a ação. Isso mostra as últimas vezes que você mesmo recomendou essa ação e qual foi o resultado (LUCRO, PERDA, ou ABERTA). Se a ação tiver um histórico de PERDA recente, seja muito mais rigoroso na sua pontuação. Se tiver histórico de LUCRO, ela pode ser um padrão que você domina. 
 
-Retorne O RANKING COMPLETO de TODAS as ${rawData.length} ações enviadas, ordenadas da melhor para a pior oportunidade de reversão (Bottom Fishing / Smart Money).${dataContext}
+Retorne O RANKING COMPLETO de TODAS as ações enviadas. Ações incompatíveis ou rejeitadas devem constar no JSON com status "REJECTED" e seus devidos "rejection_reasons".${dataContext}
 
 Retorne EXATAMENTE este formato JSON:
 {
   "ai_recommendation": {
-    "summary": "Resumo executivo do cenário de mercado e justificativa das escolhas para o horizonte de ${targetWindow.targetPeriodDescription}."
+    "summary": "Resumo executivo do cenário de mercado e justificativa das escolhas (foco na determinação dos alvos e tempo estimado)."
   },
   "confirmed_knowledge_ids": ["id_do_insight_confirmado"],
   "new_insights": [
@@ -224,14 +226,16 @@ Retorne EXATAMENTE este formato JSON:
       "stop_loss": 0.00,
       "stop_loss_percentage": 12.5,
       "risk_reward_ratio": 2.8,
-      "estimated_target_date": "${targetWindow.targetMonthYear}",
-      "estimated_timeframe": "${targetWindow.targetPeriodDescription}",
+      "estimated_target_date": "Novembro-Dezembro/2026",
+      "estimated_timeframe": "3 a 5 meses",
       "smart_money_signals": ["Acumulação institucional detectada", "RSI em sobrevenda histórica"],
       "invalidation_trigger": "Fechamento abaixo de R$ X.XX com volume acima da média",
-      "analysis": "Análise detalhada técnica e fundamentalista...",
+      "analysis": "Análise detalhada técnica e fundamentalista explicando por que este alvo foi escolhido e evidências utilizadas para estimar o tempo...",
       "recommended_allocation_percent": 20,
       "action": "BUY",
-      "reason": "Resumo executivo da razão da recomendação."
+      "reason": "Resumo executivo da razão da recomendação.",
+      "status": "APPROVED",
+      "rejection_reasons": []
     }
   ]
 }`;
@@ -262,7 +266,7 @@ Retorne EXATAMENTE este formato JSON:
         const entryPrice = stock.entry_price || currentPrice;
         const strategyScore = stock.strategy_score || stock.reversal_potential_score || 80;
         const successProbability = stock.success_probability || Math.min(95, Math.round(strategyScore * 0.95));
-        const estimatedTimeframe = stock.estimated_timeframe || targetWindow.targetPeriodDescription;
+        const estimatedTimeframe = stock.estimated_timeframe || "Dinâmico";
 
         return {
           ...stock,
@@ -272,7 +276,7 @@ Retorne EXATAMENTE este formato JSON:
           reversal_potential_score: strategyScore,
           success_probability: successProbability,
           estimated_timeframe: estimatedTimeframe,
-          estimated_target_date: stock.estimated_target_date || targetWindow.targetMonthYear,
+          estimated_target_date: stock.estimated_target_date || "Dinâmico",
         };
       });
     }
@@ -329,12 +333,8 @@ Retorne EXATAMENTE este formato JSON:
 export interface TriageResult {
   ticker: string;
   score: number;
-  scores_por_criterio: {
-    queda: number;
-    volume: number;
-    fundamentos: number;
-    suporte: number;
-  };
+  criterios_selecionados: Record<string, string>;
+  motivo_selecao: string;
   classificacao: number;
   elegivel_para_analise_profunda: boolean;
   principais_fatores: string[];
@@ -353,8 +353,7 @@ export interface TriageResponse {
 
 export async function triageMarket(
   eligibleStocks: string[],
-  existingDataMap: Record<string, StockCache>,
-  poolSize: number = 50
+  existingDataMap: Record<string, StockCache>
 ): Promise<TriageResponse> {
   if (!openai) throw new Error('OpenAI não configurada');
 
@@ -372,12 +371,24 @@ export async function triageMarket(
     };
   });
 
-  const systemPrompt = `Você é um filtro quantitativo de triagem (Layer 2).
-Sua missão é avaliar um universo elegível de ações e retornar estruturadamente um ranking identificando as ${poolSize} melhores opções para justificar uma análise profunda de Bottom Fishing (reversão).
-Critérios: Queda (30%), Volume (25%), Fundamentos (25%), Suporte (20%).
+  const systemPrompt = `Você é a Luna, uma IA de triagem estratégica (Camada 2).
+
+CONTEXTO IMPORTANTE: Você recebe exclusivamente ações que já passaram por um pré-filtro matemático (Camada 1.5) e confirmam os dois critérios centrais da estratégia:
+  1. Sofreram QUEDA RELEVANTE em relação à máxima de 52 semanas.
+  2. Apresentam SINAL INICIAL DE RECUPERAÇÃO desde a mínima de 52 semanas.
+
+SUA MISSÃO: Entre essas candidatas, PRIORIZE e RANQUEIE as melhores para análise profunda. Selecione até 50.
+
+COMO DIFERENCIAR:
+  - Use volume, P/L, P/VP, ROE, distância da mínima e outros indicadores para PRIORIZAR candidatas entre si.
+  - NÃO use esses indicadores para ELIMINAR ações antes da análise profunda. Ausência de um dado secundário não é critério de rejeição.
+  - Prefira ações com maior queda + recuperação mais forte + fundamentos razoáveis.
+  - Dê "elegivel_para_analise_profunda: true" para todas as que se destacam no conjunto.
+
+Retorne estruturadamente um ranking ordenado pelo potencial de recuperação. Registre no "motivo_selecao" o que diferenciou cada ação.
 Retorne um JSON rigoroso respeitando a saída exigida.`;
 
-  const userPrompt = `Avalie as seguintes ações e selecione as ${poolSize} melhores.\n\nDADOS:\n${JSON.stringify(stocksData)}\n\nRetorne JSON:\n{ "ranking": [ { "ticker": "VALE3", "score": 96, "scores_por_criterio": { "queda": 29, "volume": 24, "fundamentos": 23, "suporte": 20 }, "classificacao": 1, "elegivel_para_analise_profunda": true, "principais_fatores": ["X"], "fatores_de_risco": ["Y"], "nivel_de_confianca": "ALTA" } ] }`;
+  const userPrompt = `Avalie as seguintes candidatas (QUEDA+RECUPERAÇÃO confirmadas) e selecione as melhores até 50.\n\nDADOS:\n${JSON.stringify(stocksData)}\n\nRetorne JSON:\n{ "ranking": [ { "ticker": "VALE3", "score": 96, "criterios_selecionados": { "suporte": "Alta importância", "volume": "Média importância" }, "motivo_selecao": "Queda de 35% com repique forte de 12% do fundo + volume crescente", "classificacao": 1, "elegivel_para_analise_profunda": true, "principais_fatores": ["X"], "fatores_de_risco": ["Y"], "nivel_de_confianca": "ALTA" } ] }`;
 
   const response = await openai.chat.completions.create({
     model: 'gpt-5.6-luna',
@@ -416,11 +427,12 @@ export async function reviewIndications(
 ): Promise<ReviewResult[]> {
   if (!openai) throw new Error('OpenAI não configurada');
 
-  const systemPrompt = `Você é um REVISOR INDEPENDENTE especialista (Layer 4).
-Receberá indicações de Bottom Fishing feitas por outro modelo. Sua função NÃO é reescrever, mas auditar de forma cética.
-Valide Score, Probabilidade, Nível de Suporte e Risco/Retorno (R:R).
-Você DEVE aprovar ou apontar falhas graves. Responda apenas "APROVADA", "APROVADA_COM_RESSALVAS" ou "REJEITADA". 
-Se "REJEITADA", seja extremamente sucinto no "motivo_estruturado" (ex: "Risco de suporte inconsistente", "R:R inadequado").`;
+  const systemPrompt = `Você é a IA Sol, uma REVISORA INDEPENDENTE (Layer 4).
+Receberá indicações analisadas por outro modelo. Sua função é auditar a tese apresentada.
+Você deve avaliar a combinação de Queda, Recuperação e Potencial de Alvo Estrutural.
+Classificações: "APROVADA", "APROVADA_COM_RESSALVAS" ou "REJEITADA".
+A REJEIÇÃO DEVE OCORRER SOMENTE QUANDO EXISTIR MOTIVO TÉCNICO RELEVANTE PARA INVALIDAR A TESE (ex: alvo impossível, suporte inexistente). Não exija que todos os critérios técnicos sejam satisfeitos simultaneamente. Não atue como uma barreira rígida desnecessária.
+Se "REJEITADA" ou com ressalvas, seja sucinto no "motivo_estruturado".`;
 
   const userPrompt = `Revise as seguintes indicações:\n${JSON.stringify(indications)}\n\nContexto Base:\n${knowledgeContext}\n\nRetorne JSON estrito: { "reviews": [ { "ticker": "...", "decisao": "APROVADA_COM_RESSALVAS", "probabilidade_revisada": 85, "score_revisado": 80, "motivo_estruturado": "Risco de suporte validado, reduzir exposição." } ] }`;
 

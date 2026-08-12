@@ -90,6 +90,22 @@ export interface FilterResult {
   reason?: string;
 }
 
+export interface FallCandidateResult {
+  /** Tickers que passaram pelo critério QUEDA + RECUPERAÇÃO — vão para a Luna */
+  fallCandidates: string[];
+  /** Tickers elegíveis (L1) que foram descartados da triagem IA por não apresentarem o padrão */
+  excludedFromTriage: FilterResult[];
+  /** Estatísticas para auditoria */
+  stats: {
+    totalEligible: number;
+    falling: number;
+    recovering: number;
+    stable: number;
+    rising: number;
+    noCacheData: number;
+  };
+}
+
 /**
  * CAMADA 1: Filtros Determinísticos
  * Elimina rapidamente ativos que claramente não deveriam entrar na análise.
@@ -98,7 +114,8 @@ export interface FilterResult {
 export async function applyDeterministicFilters(
   catalog: string[],
   existingDataMap: Record<string, StockCache> = {},
-  auditManager?: AuditManager
+  auditManager?: AuditManager,
+  maxPrice?: number
 ): Promise<{
   eligibleTickers: string[];
   eliminatedDetails: FilterResult[];
@@ -129,6 +146,12 @@ export async function applyDeterministicFilters(
       continue;
     }
 
+    // Regra 4: Preço máximo
+    if (maxPrice !== undefined && cached.current_price > maxPrice) {
+      eliminatedDetails.push({ ticker, eliminated: true, reason: `Preço acima do limite (${cached.current_price} > ${maxPrice})` });
+      continue;
+    }
+
     eligibleTickers.push(ticker);
   }
 
@@ -140,4 +163,82 @@ export async function applyDeterministicFilters(
   }
 
   return { eligibleTickers, eliminatedDetails };
+}
+
+/**
+ * CAMADA 1.5: Pré-Filtro Estratégico — QUEDA + RECUPERAÇÃO
+ *
+ * Filtra matematicamente os ativos elegíveis (pós Camada 1) para identificar
+ * apenas aqueles que atendem ao critério central da estratégia:
+ *   1. Sofreram queda relevante em relação à máxima de 52 semanas (≥ minDropFromHigh%)
+ *   2. Apresentam sinal inicial de recuperação desde a mínima de 52 semanas (≥ minRiseFromLow%)
+ *
+ * Ações sem dados em cache passam direto para não perder oportunidades novas.
+ * Volume, fundamentos e outros indicadores NÃO são critérios de eliminação aqui —
+ * eles serão usados pela Luna para PRIORIZAR entre as candidatas.
+ */
+export function applyRecoveryPreFilter(
+  eligibleTickers: string[],
+  dataMap: Record<string, StockCache>,
+  minDropFromHigh: number = 10,   // % mínimo de queda da máxima de 52s
+  minRiseFromLow: number = 3      // % mínimo de repique da mínima de 52s
+): FallCandidateResult {
+  const fallCandidates: string[] = [];
+  const excludedFromTriage: FilterResult[] = [];
+
+  const stats = { totalEligible: eligibleTickers.length, falling: 0, recovering: 0, stable: 0, rising: 0, noCacheData: 0 };
+
+  for (const ticker of eligibleTickers) {
+    const cached = dataMap[ticker.toUpperCase()];
+
+    // Sem dados em cache → passa direto (precaução: não descartar ativos novos)
+    if (!cached || !cached.current_price || !cached.fundamentals?.week_52_high || !cached.fundamentals?.week_52_low) {
+      fallCandidates.push(ticker);
+      stats.noCacheData++;
+      continue;
+    }
+
+    const price = cached.current_price;
+    const high52w = cached.fundamentals.week_52_high;
+    const low52w = cached.fundamentals.week_52_low;
+
+    // Calcular distâncias percentuais
+    const dropFromHigh = high52w > 0 ? ((high52w - price) / high52w) * 100 : 0;
+    const riseFromLow  = low52w  > 0 ? ((price - low52w)  / low52w)  * 100 : 0;
+
+    const isFalling   = dropFromHigh >= minDropFromHigh;
+    const isRecovering = riseFromLow >= minRiseFromLow;
+
+    if (!isFalling) {
+      // Ação em alta ou estável — não é candidata da estratégia
+      if (dropFromHigh < 5) {
+        stats.rising++;
+        excludedFromTriage.push({ ticker, eliminated: true, reason: `Em alta / próxima da máxima (queda de apenas ${dropFromHigh.toFixed(1)}% da máxima de 52s)` });
+      } else {
+        stats.stable++;
+        excludedFromTriage.push({ ticker, eliminated: true, reason: `Queda insuficiente (${dropFromHigh.toFixed(1)}% — mínimo exigido: ${minDropFromHigh}%)` });
+      }
+      continue;
+    }
+
+    stats.falling++;
+
+    if (!isRecovering) {
+      // Em queda mas sem sinal de repique ainda — excluída desta rodada
+      stats.stable++;
+      excludedFromTriage.push({ ticker, eliminated: true, reason: `Em queda (${dropFromHigh.toFixed(1)}%) mas sem sinal de recuperação (repique de ${riseFromLow.toFixed(1)}% — mínimo: ${minRiseFromLow}%)` });
+      continue;
+    }
+
+    // ✅ QUEDA + RECUPERAÇÃO — candidata para a Luna
+    stats.recovering++;
+    fallCandidates.push(ticker);
+  }
+
+  console.log(`\n🔍 [Camada 1.5] Pré-filtro QUEDA+RECUPERAÇÃO:`);
+  console.log(`   Elegíveis recebidos: ${stats.totalEligible}`);
+  console.log(`   Em queda: ${stats.falling} | Com recuperação: ${stats.recovering} | Estáveis/Alta: ${stats.stable + stats.rising} | Sem cache: ${stats.noCacheData}`);
+  console.log(`   → Candidatas para Luna: ${fallCandidates.length}`);
+
+  return { fallCandidates, excludedFromTriage, stats };
 }
