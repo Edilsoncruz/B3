@@ -18,6 +18,7 @@ import { AuditManager } from "../services/auditManager";
 import { generateAuditPDF } from "../utils/AuditPDFGenerator";
 import { HistoryTab } from "./HistoryTab";
 import { UnibolsaTab } from "./UnibolsaTab";
+import { ConfigTab } from "./ConfigTab";
 
 export function Dashboard() {
   const [loading, setLoading] = useState(false);
@@ -43,7 +44,7 @@ export function Dashboard() {
   const [lastAuditId, setLastAuditId] = useState<string | null>(null);
 
   // Tab State
-  const [activeTab, setActiveTab] = useState<'ANALISE' | 'HISTORICO' | 'UNIBOLSAI'>('ANALISE');
+  const [activeTab, setActiveTab] = useState<'ANALISE' | 'HISTORICO' | 'UNIBOLSAI' | 'CONFIGURACAO'>('ANALISE');
 
   // Controle do Drawer da Base de Conhecimento
   const [isKnowledgeDrawerOpen, setIsKnowledgeDrawerOpen] = useState(false);
@@ -563,6 +564,13 @@ export function Dashboard() {
             <Activity className="w-4 h-4" />
             Unibolsa API (RAW)
           </button>
+          <button
+            onClick={() => setActiveTab('CONFIGURACAO')}
+            className={`pb-2 border-b-2 font-semibold text-sm transition-colors cursor-pointer flex items-center gap-2 ${activeTab === 'CONFIGURACAO' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-[#8E9299] hover:text-white'}`}
+          >
+            <SlidersHorizontal className="w-4 h-4" />
+            Configuração IA
+          </button>
         </div>
       </header>
 
@@ -729,6 +737,8 @@ export function Dashboard() {
         <HistoryTab />
       ) : activeTab === 'UNIBOLSAI' ? (
         <UnibolsaTab />
+      ) : activeTab === 'CONFIGURACAO' ? (
+        <ConfigTab />
       ) : (
       <main className="max-w-6xl mx-auto px-6 py-10">
         {/* Empty State */}

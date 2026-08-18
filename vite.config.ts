@@ -30,6 +30,13 @@ export default defineConfig(({mode}) => {
           changeOrigin: true,
           rewrite: (path: string) => path.replace(/^\/api\/bolsai/, ''),
           secure: true,
+        },
+        // Proxy para a API da Moonshot (Kimi) — resolve bloqueio de CORS no browser
+        '/api/moonshot': {
+          target: 'https://api.moonshot.ai',
+          changeOrigin: true,
+          rewrite: (path: string) => path.replace(/^\/api\/moonshot/, ''),
+          secure: true,
         }
       }
     },

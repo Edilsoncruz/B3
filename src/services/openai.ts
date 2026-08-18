@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { callAI, getActiveModel } from './aiProvider';
 import { StockCache } from '../lib/supabase';
 import { calculateTargetWindow } from '../utils/dateUtils';
 import { 
@@ -241,23 +242,21 @@ Retorne EXATAMENTE este formato JSON:
 }`;
 
   try {
-    const modelToUse = 'gpt-5.6-terra';
+    const activeModel = getActiveModel('terra');
+    console.log(`[Terra] Usando modelo: ${activeModel}`);
 
-    const response = await openai.chat.completions.create({
-      model: modelToUse,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ],
-      response_format: { type: 'json_object' }
-    });
+    const aiResult = await callAI('terra', [
+      { role: 'system', content: systemPrompt },
+      { role: 'user',   content: userPrompt }
+    ]);
 
-    const content = response.choices[0].message.content;
+    const content = aiResult.content;
     if (!content) {
-      throw new Error('Resposta vazia da OpenAI.');
+      throw new Error('Resposta vazia da IA.');
     }
 
     const parsed = JSON.parse(content) as any;
+    const tokenUsageForReturn = aiResult.usage;
 
     // Normaliza os campos obrigatórios para garantir integridade caso a IA omita algum número
     if (parsed.ranked_stocks && Array.isArray(parsed.ranked_stocks)) {
@@ -310,14 +309,13 @@ Retorne EXATAMENTE este formato JSON:
       new_insights: newInsights
     };
 
-    // Adiciona uso de tokens ao resultado para exibição na UI
     parsed.token_usage = {
-      prompt_tokens: response.usage?.prompt_tokens ?? 0,
-      completion_tokens: response.usage?.completion_tokens ?? 0,
-      total_tokens: response.usage?.total_tokens ?? 0,
+      prompt_tokens:    tokenUsageForReturn.prompt_tokens    ?? 0,
+      completion_tokens: tokenUsageForReturn.completion_tokens ?? 0,
+      total_tokens:     tokenUsageForReturn.total_tokens     ?? 0,
     };
 
-    console.log(`[OpenAI] Tokens usados: ${parsed.token_usage.total_tokens} (prompt: ${parsed.token_usage.prompt_tokens} + resposta: ${parsed.token_usage.completion_tokens})`);
+    console.log(`[Terra] Tokens usados: ${parsed.token_usage.total_tokens}`);
 
     return parsed as AIRecommendation;
 
@@ -355,7 +353,7 @@ export async function triageMarket(
   eligibleStocks: string[],
   existingDataMap: Record<string, StockCache>
 ): Promise<TriageResponse> {
-  if (!openai) throw new Error('OpenAI não configurada');
+  if (!openai && getActiveModel('luna') === 'gpt-5.6-luna') throw new Error('OpenAI não configurada');
 
   const stocksData = eligibleStocks.map(ticker => {
     const cached = existingDataMap[ticker.toUpperCase()];
@@ -390,21 +388,20 @@ Retorne um JSON rigoroso respeitando a saída exigida.`;
 
   const userPrompt = `Avalie as seguintes candidatas (QUEDA+RECUPERAÇÃO confirmadas) e selecione as melhores até 50.\n\nDADOS:\n${JSON.stringify(stocksData)}\n\nRetorne JSON:\n{ "ranking": [ { "ticker": "VALE3", "score": 96, "criterios_selecionados": { "suporte": "Alta importância", "volume": "Média importância" }, "motivo_selecao": "Queda de 35% com repique forte de 12% do fundo + volume crescente", "classificacao": 1, "elegivel_para_analise_profunda": true, "principais_fatores": ["X"], "fatores_de_risco": ["Y"], "nivel_de_confianca": "ALTA" } ] }`;
 
-  const response = await openai.chat.completions.create({
-    model: 'gpt-5.6-luna',
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt }
-    ],
-    response_format: { type: 'json_object' }
-  });
+  const activeModel = getActiveModel('luna');
+  console.log(`[Luna] Usando modelo: ${activeModel}`);
 
-  const parsed = JSON.parse(response.choices[0].message.content || '{"ranking":[]}');
-  
+  const aiResult = await callAI('luna', [
+    { role: 'system', content: systemPrompt },
+    { role: 'user',   content: userPrompt }
+  ]);
+
+  const parsed = JSON.parse(aiResult.content || '{"ranking":[]}');
+
   parsed.token_usage = {
-    prompt_tokens: response.usage?.prompt_tokens ?? 0,
-    completion_tokens: response.usage?.completion_tokens ?? 0,
-    total_tokens: response.usage?.total_tokens ?? 0,
+    prompt_tokens:     aiResult.usage.prompt_tokens,
+    completion_tokens: aiResult.usage.completion_tokens,
+    total_tokens:      aiResult.usage.total_tokens,
   };
 
   return parsed as TriageResponse;
@@ -425,7 +422,8 @@ export async function reviewIndications(
   indications: StockAnalysis[],
   knowledgeContext: string = ''
 ): Promise<ReviewResult[]> {
-  if (!openai) throw new Error('OpenAI não configurada');
+  const activeModel = getActiveModel('sol');
+  console.log(`[Sol] Usando modelo: ${activeModel}`);
 
   const systemPrompt = `Você é a IA Sol, uma REVISORA INDEPENDENTE (Layer 4).
 Receberá indicações analisadas por outro modelo. Sua função é auditar a tese apresentada.
@@ -436,16 +434,12 @@ Se "REJEITADA" ou com ressalvas, seja sucinto no "motivo_estruturado".`;
 
   const userPrompt = `Revise as seguintes indicações:\n${JSON.stringify(indications)}\n\nContexto Base:\n${knowledgeContext}\n\nRetorne JSON estrito: { "reviews": [ { "ticker": "...", "decisao": "APROVADA_COM_RESSALVAS", "probabilidade_revisada": 85, "score_revisado": 80, "motivo_estruturado": "Risco de suporte validado, reduzir exposição." } ] }`;
 
-  const response = await openai.chat.completions.create({
-    model: 'gpt-5.6-sol',
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt }
-    ],
-    response_format: { type: 'json_object' }
-  });
+  const aiResult = await callAI('sol', [
+    { role: 'system', content: systemPrompt },
+    { role: 'user',   content: userPrompt }
+  ]);
 
-  const parsed = JSON.parse(response.choices[0].message.content || '{"reviews":[]}');
+  const parsed = JSON.parse(aiResult.content || '{"reviews":[]}');
   return parsed.reviews as ReviewResult[];
 }
 
