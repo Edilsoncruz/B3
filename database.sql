@@ -202,3 +202,41 @@ CREATE TABLE IF NOT EXISTS audit_results (
 ALTER TABLE audit_results ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Enable all for all users on audit_results" ON audit_results FOR ALL USING (true) WITH CHECK (true);
 
+
+-- --------------------------------------------------------
+-- TABELAS DO ASSISTENTE DA ANÁLISE
+-- --------------------------------------------------------
+
+-- Sessão de chat vinculada a uma indicação específica (1:1 com analyzed_stocks)
+-- Garante isolamento: cada indicação tem seu próprio contexto de conversa.
+CREATE TABLE IF NOT EXISTS indication_chats (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    indication_id VARCHAR(100) NOT NULL REFERENCES analyzed_stocks(id) ON DELETE CASCADE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc', now()),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc', now()),
+    UNIQUE(indication_id)
+);
+
+ALTER TABLE indication_chats ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Enable all for all users on indication_chats"
+    ON indication_chats FOR ALL USING (true) WITH CHECK (true);
+
+-- Mensagens do chat vinculadas ao chat de uma indicação
+-- role: 'user' | 'assistant' | 'system'
+-- message_type: 'text' | 'reanalysis' | 'question_analysis'
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    chat_id UUID NOT NULL REFERENCES indication_chats(id) ON DELETE CASCADE,
+    role VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+    content TEXT NOT NULL,
+    message_type VARCHAR(30) DEFAULT 'text',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc', now())
+);
+
+ALTER TABLE chat_messages ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Enable all for all users on chat_messages"
+    ON chat_messages FOR ALL USING (true) WITH CHECK (true);
+
+-- Índice para acelerar a busca de mensagens por chat
+CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_id ON chat_messages(chat_id);
+CREATE INDEX IF NOT EXISTS idx_indication_chats_indication_id ON indication_chats(indication_id);

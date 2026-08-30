@@ -8,6 +8,7 @@ import { useState, useRef, useEffect } from "react";
 import { toPng } from "html-to-image";
 import { StockAnalysis, PortfolioAllocation, ExcludedAllocation } from "../services/openai";
 import { toggleFavoriteStatus, supabase, saveOperation, closeOperation } from "../lib/supabase";
+import { AnalysisAssistant } from "./AnalysisAssistant";
 
 const SECTOR_MAP: Record<string, { sector: string, group: string }> = {
   PETR4: { sector: "Petróleo e Gás", group: "Exploração e Refino" },
@@ -473,10 +474,10 @@ export function StockCard({ stock, rank, simulationAmount, allocation, excludedA
         </div>
 
         {/* MAIN CONTENT GRID */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 p-4 md:p-6 pt-2">
+        <div className="grid grid-cols-1 xl:grid-cols-5 gap-4 p-4 md:p-6 pt-2">
           
           {/* Left Column (Chart + Indicators) */}
-          <div className="lg:col-span-2 flex flex-col gap-4">
+          <div className="xl:col-span-2 flex flex-col gap-4">
             <div className="h-[400px] w-full rounded-xl overflow-hidden border border-[#1f2128] bg-[#0c0d11]">
               <iframe
                 key={tvSymbol}
@@ -527,8 +528,8 @@ export function StockCard({ stock, rank, simulationAmount, allocation, excludedA
             </div>
           </div>
 
-          {/* Right Column (Analysis & Operations) */}
-          <div className="flex flex-col gap-4">
+          {/* Center Column (Analysis & Operations) */}
+          <div className="xl:col-span-1 flex flex-col gap-4">
             
             {/* Smart Money Analysis Block */}
             <div className="rounded-xl border border-[#1f2128] bg-[#0c0d11] p-5 flex flex-col gap-4">
@@ -686,6 +687,12 @@ export function StockCard({ stock, rank, simulationAmount, allocation, excludedA
             </div>
 
           </div>
+
+          {/* Right Column (Assistente da Análise) */}
+          <div className="xl:col-span-2 flex flex-col">
+            <AnalysisAssistant stock={stock} analysisDate={analysisDateStr} />
+          </div>
+
         </div>
 
         {/* FOOTER */}

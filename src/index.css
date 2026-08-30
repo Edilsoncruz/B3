@@ -1,1 +1,63 @@
 @import "tailwindcss";
+
+/* ── Assistente da Análise — Estilos para renderização de markdown ── */
+.assistant-message strong {
+  color: #e2e8f0;
+  font-weight: 700;
+}
+
+.assistant-message em {
+  color: #a5b4fc;
+  font-style: italic;
+}
+
+/* Tabelas do markdown */
+.assistant-message table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 11px;
+}
+
+.assistant-message th {
+  background: rgba(139, 92, 246, 0.15);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  padding: 4px 8px;
+  text-align: left;
+  color: #c4b5fd;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.assistant-message td {
+  border: 1px solid rgba(42, 43, 47, 0.8);
+  padding: 4px 8px;
+  color: #d1d5db;
+}
+
+.assistant-message tr:nth-child(even) td {
+  background: rgba(26, 27, 31, 0.5);
+}
+
+/* Listas */
+.assistant-message ul,
+.assistant-message ol {
+  margin: 4px 0;
+  padding-left: 16px;
+}
+
+.assistant-message li {
+  margin: 2px 0;
+  color: #d1d5db;
+}
+
+/* Código inline */
+.assistant-message code {
+  background: rgba(139, 92, 246, 0.1);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-family: monospace;
+  font-size: 10px;
+  color: #c4b5fd;
+}
