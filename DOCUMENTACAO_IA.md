@@ -1,52 +1,83 @@
-# Documentação do Sistema: Smart Money Tracker AI 2
+# Documentação Completa: Smart Money Tracker AI 2
 
-Este documento descreve o funcionamento do **Smart Money Tracker AI 2**, um sistema avançado de análise quantitativa e qualitativa do mercado financeiro brasileiro (B3), focado em identificar oportunidades de **Bottom Fishing** (reversão de tendência) e rastreamento de **Smart Money** (fluxo institucional).
-
----
-
-## 1. O que o sistema faz?
-
-O sistema atua como um analista de investimentos automatizado de alta precisão para **Swing e Position Trading**. Em vez de olhar aleatoriamente para os gráficos, o sistema executa um **Pipeline Inteligente de 5 Etapas**, garantindo que apenas as melhores oportunidades reais cheguem até o usuário final.
-
-### O Pipeline Inteligente (5 Etapas)
-
-1. **Universo Inicial (Catálogo B3):** O sistema mapeia um catálogo completo com mais de 400 ativos principais da B3, englobando todos os setores (Petróleo, Bancos, Energia, Varejo, etc.).
-2. **Seleção Inteligente (Filtros e Triagem IA):** Aplica filtros técnicos para remover "lixo" (penny stocks, ativos sem liquidez) e depois usa uma IA quantitativa para triar as melhores oportunidades.
-3. **Atualização Incremental:** Busca dados frescos (cotações, fundamentos, volume) apenas para as ações que passaram pela peneira inicial, economizando requisições de API.
-4. **Consolidação de Dados (Supabase):** Salva e organiza todo o histórico, cotações e fundamentos de forma estruturada no banco de dados.
-5. **Estratégia de IA (Análise Profunda):** A Inteligência Artificial consome esses dados estruturados para desenhar operações completas (Alvo, Stop Loss, Probabilidade de Acerto).
+Este documento descreve o funcionamento detalhado do **Smart Money Tracker AI 2**, um sistema avançado de análise quantitativa e qualitativa do mercado financeiro brasileiro (B3). O foco do sistema é identificar oportunidades de **Bottom Fishing** (reversão de tendência em ativos sobrevendidos) e rastreamento de **Smart Money** (fluxo institucional).
 
 ---
 
-## 2. Como é feita a análise pela IA?
+## 1. O Que o Sistema Faz e Em Que Ordem (O Pipeline)
 
-O grande diferencial do sistema é sua arquitetura multi-agente (várias IAs trabalhando em conjunto). A análise é dividida em "Camadas" (Layers) de Inteligência Artificial:
+O sistema atua como um analista de investimentos automatizado e sistemático. A execução ocorre em uma ordem estrita (Pipeline) para garantir eficiência e precisão:
 
-### Camada 1: Filtros Determinísticos (Pré-IA)
-Antes de qualquer IA analisar, o código remove ativos com preço abaixo de R$ 1,00 ou volume médio abaixo de 150 mil, garantindo que a IA não perca tempo com ações não operáveis.
+### Etapa 1: Definição do Universo Inicial
+O sistema carrega um catálogo com os principais ativos da B3, mapeando empresas de todos os setores. Esta é a base de dados bruta.
 
-### Camada 2: Triagem Inteligente (IA "Luna")
-- **Modelo Utilizado:** `gpt-5.6-luna` (Filtro Quantitativo)
-- **Função:** Avalia o universo de ações e cria um ranking das melhores opções para "Bottom Fishing". 
-- **Como analisa:** Ela avalia dinamicamente múltiplos fatores (queda acumulada, suporte, fundamentos, volume) sem usar pesos fixos matemáticos. A IA entende o momento do mercado e decide quais fatores são mais importantes, gerando uma lista reduzida de "candidatas".
+### Etapa 2: Triagem e Filtros Pré-IA (Screener Técnico)
+Antes de gastar processamento e tokens de IA, o sistema aplica filtros matemáticos e técnicos rigorosos. O objetivo é remover "ruído" e ativos inoperáveis. *(Veja a seção 5 para as sugestões de implementação técnica destes filtros).*
 
-### Camada 3: Analista Sênior (IA "Terra" / Gemini)
-- **Modelo Utilizado:** `gpt-5.6-terra` ou `Gemini 2.5 Flash` (Estratégia Principal)
-- **Função:** Atua como o especialista em *Smart Money*. 
-- **Como analisa:**
-  - Busca ações em **Sobrevenda Extrema** (fundo de 52 semanas) e sinais de que grandes instituições ("Smart Money") estão acumulando.
-  - **Stop Loss:** Segue uma regra rígida de não usar stops curtos. O stop é posicionado com folga técnica (10% a 25%) abaixo de suportes críticos para evitar violinadas (estopagem prematura por ruído de mercado).
-  - **Risco x Retorno:** Garante um alvo realista para que a proporção Risco/Retorno seja de pelo menos 1:2.
-  - **Probabilidade de Sucesso:** Estima uma probabilidade percentual (ex: 82%) com base no histórico e nos fundamentos da empresa (PL, VPA, ROE, Dívida).
-  - **Base de Conhecimento:** Consulta indicações passadas (lucro ou perda) no banco de dados. Se a IA recomendou uma ação antes e deu prejuízo, ela se torna mais rigorosa com esse ativo. Se encontrou um novo padrão vencedor, ela salva esse "Insight" para as próximas análises.
+### Etapa 3: Atualização de Dados (Data Fetching)
+Para os ativos que sobreviveram aos filtros iniciais, o sistema busca os dados mais recentes de mercado (cotações, volume, indicadores técnicos) e de fundamentos (P/L, ROE, VPA) através de APIs financeiras.
 
-### Camada 4: Revisor Independente (IA "Sol")
-- **Modelo Utilizado:** `gpt-5.6-sol` (Auditoria e Revisão)
-- **Função:** Uma IA cética que audita as recomendações da Camada 3.
-- **Como analisa:** Não propõe novas ações, apenas valida as que foram escolhidas. Ela verifica o *Score*, a *Probabilidade*, o *Nível de Suporte* e a coerência do *Risco x Retorno*. Ao final, ela define se a operação está: **APROVADA**, **APROVADA_COM_RESSALVAS**, ou **REJEITADA** (com justificativas estruturadas).
+### Etapa 4: Análise Multi-Agente (Processamento IA)
+Os dados atualizados são enviados para a arquitetura de Inteligência Artificial, onde diferentes "agentes" (modelos) assumem papéis específicos para analisar, pontuar e revisar cada ativo.
 
-### Auditoria e Logs (AuditManager)
-O sistema possui um componente poderoso de Auditoria (`AuditManager`) que registra no banco de dados cada passo da IA: quais ativos foram eliminados, por quais motivos, os tokens gastos e o tempo de execução. Isso garante total transparência sobre o motivo de uma ação ter sido escolhida em detrimento de outra.
+### Etapa 5: Consolidação e Auditoria (Banco de Dados)
+Todas as análises, pontuações (scores), decisões e justificativas são salvas no Supabase. O módulo `AuditManager` registra o histórico completo do que a IA pensou, garantindo total transparência.
 
-## Resumo do Diferencial
-A análise não é um simples "prompt" perguntando quais ações comprar. É um processo robusto de **eliminação progressiva**, validação por **múltiplas IAs**, regras rígidas de **gerenciamento de risco** e um sistema de **aprendizado contínuo** (Base de Conhecimento) que lembra de erros e acertos passados.
+---
+
+## 2. Papéis de Cada Componente IA (Arquitetura Multi-Agente)
+
+A análise não é feita por um único "cérebro", mas dividida em "Camadas" (Layers) com papéis definidos:
+
+*   **Agente 1: A Triadora (IA "Luna" - Filtro Quantitativo)**
+    *   **Papel:** Reduzir a lista de dezenas de papéis para os "Top Candidatos".
+    *   **Ação:** Analisa o contexto geral (queda, suporte, volume) e descarta ativos que não apresentam sinais claros de oportunidade imediata.
+*   **Agente 2: O Estrategista (IA "Terra" / Gemini - Análise Profunda)**
+    *   **Papel:** Desenhar o trade (operação) completo.
+    *   **Ação:** Define o *Score* final, traça o alvo de lucro, posiciona o *Stop Loss* (sempre com folga técnica abaixo de suportes para evitar violinadas) e calcula a probabilidade de acerto com base no histórico e fundamentos.
+*   **Agente 3: O Auditor (IA "Sol" - Revisor Cético)**
+    *   **Papel:** Validar e auditar as operações propostas pelo Estrategista.
+    *   **Ação:** Não cria ideias novas. Apenas verifica se a relação Risco x Retorno faz sentido e se a probabilidade não está otimista demais. Pode classificar o trade como: **APROVADO**, **APROVADA_COM_RESSALVAS**, ou **REJEITADA**.
+
+---
+
+## 3. Como a IA Pensa e Age
+
+A inteligência do sistema baseia-se em combinar **análise técnica** (gráficos) com **análise fundamentalista** (saúde da empresa) e **fluxo** (Smart Money).
+
+1.  **Identificação do Fundo (Bottom Fishing):** A IA busca ativos que sofreram quedas fortes (geralmente próximos à mínima de 52 semanas ou de períodos dinâmicos) e que pararam de cair.
+2.  **Rastreio do Smart Money:** A IA procura divergências: o preço parou de cair, mas o volume de negociação aumentou significativamente. Isso indica que "mãos fortes" (instituições) estão acumulando o ativo silenciosamente.
+3.  **Gerenciamento de Risco Rígido:** A IA é programada para rejeitar operações onde o risco é maior que a metade do retorno esperado (Risco:Retorno mínimo de 1:2).
+4.  **Memória e Contexto (Base de Conhecimento):** A IA consulta o banco de dados de operações passadas. Se um padrão falhou no passado para um ativo específico, ela se torna mais rigorosa antes de recomendá-lo novamente.
+
+---
+
+## 4. Classificação, Scoring e Probabilidade
+
+Cada ativo analisado recebe uma classificação estruturada gerada pela IA "Terra":
+
+*   **Score (0 a 100):** Uma pontuação agregada que reflete a atratividade do ativo.
+    *   *Fatores de peso:* Proximidade de suportes fortes, anomalias de volume (Smart Money), valuation atrativo (P/L baixo) e qualidade da empresa (ROE).
+*   **Nível de Suporte:** Classificado de Fraco a Extremo. A IA identifica se o preço está em uma região histórica onde os compradores costumam defender posições.
+*   **Probabilidade de Sucesso (%):** Uma estimativa de confiança da IA baseada na convergência de sinais. Exemplo: um ativo no suporte técnico + P/L descontado + aumento de volume recebe uma probabilidade muito maior (ex: 85%) do que um ativo caindo sem volume (ex: 40%).
+
+---
+
+## 5. Sugestão de Implementação: Filtros Iniciais (Screener Otimizado)
+
+Para garantir que a IA analise apenas os ativos mais promissores e evitar que o capital fique "preso" em operações estagnadas, propõe-se a implementação dos seguintes **Filtros Determinísticos (Pré-IA)** na Etapa 2 do pipeline.
+
+Estes filtros devem ser aplicados programaticamente *antes* do envio de dados para os modelos LLM:
+
+1.  **Filtro Anti-Mico (Penny Stocks):**
+    *   `Preço >= 5 BRL`
+    *   **Objetivo:** Eliminar ativos excessivamente manipuláveis e com volatilidade matemática irreal, protegendo o gerenciamento de risco.
+2.  **Filtro de Liquidez Profunda:**
+    *   `Volume Financeiro Médio (10 Dias) >= 20.000.000 BRL` (20 milhões de Reais)
+    *   **Objetivo:** Garantir que o sistema só recomende ativos institucionais, permitindo entradas e saídas rápidas sem sofrer com *slippage* (spread do book).
+3.  **Filtro de Amplitude / Volatilidade:**
+    *   `ATR (Average True Range, 14 períodos) >= 3%`
+    *   **Objetivo:** Filtrar ações "mortas" ou lateralizadas. O ativo precisa ter um range médio de movimentação diária de pelo menos 3% para que os alvos da operação sejam atingidos em um tempo razoável.
+4.  **Filtro de Agressividade / Momentum:**
+    *   `Beta (5 Anos) >= 1.2`
+    *   **Objetivo:** Selecionar ações que tendem a se mover com mais força que o Ibovespa (benchmarking). Ações com alto beta respondem mais rápido às reversões de mercado.
