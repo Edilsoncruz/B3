@@ -39,6 +39,14 @@ export function Dashboard() {
   const [showFilters, setShowFilters] = useState(false);
   const [maxPrice, setMaxPrice] = useState<number | ''>('');
 
+  // Contexto B3_CONTEXT
+  const [showContextBar, setShowContextBar] = useState(false);
+  const [userContextText, setUserContextText] = useState("");
+  const [userContextFiles, setUserContextFiles] = useState<File[]>([]);
+  const [hasPosition, setHasPosition] = useState(false);
+  const [positionAmount, setPositionAmount] = useState<number | "">("");
+  const [positionAvgPrice, setPositionAvgPrice] = useState<number | "">("");
+
   // Audit Mode
   const [isAuditMode, setIsAuditMode] = useState(false);
   const [lastAuditId, setLastAuditId] = useState<string | null>(null);
@@ -87,16 +95,51 @@ export function Dashboard() {
       const auditManager = new AuditManager(isAuditMode);
       setLastAuditId(isAuditMode ? auditManager.getAuditId() : null);
 
+      // Consolida o B3_CONTEXT lendo os arquivos locais (se houver) e concatenando com o texto livre.
+      let fullContextStr = userContextText.trim();
+      
+      if (userContextFiles.length > 0) {
+        let filesText = "";
+        for (const file of userContextFiles) {
+          try {
+            const text = await file.text();
+            // Trunca arquivos muito grandes para evitar timeout/excessivo uso de token
+            const truncatedText = text.length > 50000 ? text.substring(0, 50000) + "\n[...CONTEÚDO TRUNCADO DEVIDO AO LIMITE DE TAMANHO...]" : text;
+            filesText += `\n--- ARQUIVO: ${file.name} ---\n${truncatedText}\n`;
+          } catch (e) {
+             filesText += `\n--- ARQUIVO: ${file.name} (Erro ao ler) ---\n`;
+          }
+        }
+        if (filesText) {
+           fullContextStr += `\n\nArquivos Anexados:\n${filesText}`;
+        }
+      }
+
+      // Constrói objeto de posição estruturado se estiver habilitado
+      let positionData = undefined;
+      if (hasPosition && specificTicker.trim() && positionAmount && positionAvgPrice) {
+         positionData = {
+           ticker: specificTicker.trim().toUpperCase(),
+           quantity: Number(positionAmount),
+           averagePrice: Number(positionAvgPrice)
+         };
+      }
+
       if (auditManager.isEnabled()) {
         await auditManager.startRun({
           strategy: 'Smart Money Bottom Fishing',
           strategyVersion: '1.0',
-          analysisMode: specificTicker.trim() ? 'Ticker Específico' : 'Varredura Dinâmica',
+          analysisMode: specificTicker.trim() ? (positionData ? 'Posição Aberta' : 'Ticker Específico') : 'Varredura Dinâmica',
           poolSize: specificTicker.trim() ? 1 : B3_FULL_CATALOG.length,
           recommendationCount,
           targetPeriodValue,
           targetPeriodUnit,
-          selectionParams: DEFAULT_SELECTION_PARAMS
+          selectionParams: DEFAULT_SELECTION_PARAMS,
+          context: {
+            hasUserContext: !!fullContextStr,
+            hasPosition: !!positionData,
+            filesAttached: userContextFiles.map(f => f.name)
+          }
         });
       }
 
@@ -108,6 +151,7 @@ export function Dashboard() {
         specificTicker: specificTicker.trim() || undefined,
         maxPrice: maxPrice ? Number(maxPrice) : undefined,
         auditManager,
+        positionData,
         onProgress: (p) => {
           setCurrentStep(3);
           setProgressMsg(`Etapa 3 & 4: Verificando Supabase (${p.current}/${p.total}) - ${p.message}`);
@@ -136,7 +180,8 @@ export function Dashboard() {
         targetPeriodValue,
         targetPeriodUnit,
         execDate,
-        deepAnalysis
+        deepAnalysis,
+        fullContextStr
       );
 
       // ETAPA 4: Revisão Especializada (Sol) - Apenas se Análise Profunda = ON
@@ -166,7 +211,7 @@ export function Dashboard() {
            setProgressMsg(`Etapa 4: Sol avaliando candidatas ${currentIndex + 1} a ${currentIndex + lote.length}...`);
            
            try {
-             const reviews = await reviewIndications(lote, "Contexto Estratégia B3");
+             const reviews = await reviewIndications(lote, "Contexto Estratégia B3", !!positionData, fullContextStr);
              evaluatedCount += lote.length;
              currentIndex += lote.length;
 
@@ -495,15 +540,16 @@ export function Dashboard() {
               </button>
 
               <button
-                onClick={() => setIsBacktestMode(!isBacktestMode)}
+                onClick={() => setShowContextBar(!showContextBar)}
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all ${
-                  isBacktestMode 
-                    ? "bg-amber-500 text-black font-bold" 
+                  showContextBar 
+                    ? "bg-indigo-600 text-white font-bold" 
                     : "text-[#8E9299] hover:text-white hover:bg-[#1e1f23]"
                 }`}
+                title="Adicionar contexto do usuário, arquivos e posições (B3_CONTEXT)"
               >
-                <History className="w-3.5 h-3.5" />
-                <span className="hidden lg:inline">Backteste</span>
+                <Database className="w-3.5 h-3.5" />
+                <span className="hidden lg:inline">B3_CONTEXT</span>
               </button>
 
               <button
@@ -731,6 +777,112 @@ export function Dashboard() {
           </div>
         </motion.div>
       )}
+
+      {/* B3_CONTEXT Settings Bar */}
+      <AnimatePresence>
+        {activeTab === 'ANALISE' && showContextBar && (
+          <motion.div 
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="border-b overflow-hidden print:hidden border-indigo-500/20 bg-indigo-500/5 text-white"
+          >
+            <div className="max-w-6xl mx-auto px-6 py-4 space-y-4">
+              <div className="flex items-center gap-2">
+                <Database className="w-4 h-4 text-indigo-400" />
+                <span className="text-xs uppercase tracking-widest font-bold text-indigo-400">
+                  Contexto do Usuário (B3_CONTEXT)
+                </span>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Text and File Context */}
+                <div className="space-y-3 p-3 rounded-lg bg-[#0a0a0a] border border-[#2a2b2f]">
+                  <div>
+                    <label className="text-[10px] uppercase text-[#8E9299] block mb-1">Texto de Contexto Livre</label>
+                    <textarea 
+                      value={userContextText}
+                      onChange={(e) => setUserContextText(e.target.value)}
+                      placeholder="Ex: Estou buscando diversificação no setor de energia e tenho um horizonte de 2 anos..."
+                      className="w-full bg-[#151619] border border-[#2a2b2f] text-xs text-white p-2 rounded focus:outline-none focus:border-indigo-500/50 resize-y"
+                      rows={3}
+                    />
+                    <span className="text-[9px] text-[#8E9299] mt-1 block">Não use para registrar posição. O contexto livre influencia a IA mas mantém neutralidade.</span>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] uppercase text-[#8E9299] block mb-1">Anexar Arquivos (.txt, .csv, .md, .json)</label>
+                    <input 
+                      type="file" 
+                      multiple
+                      accept=".txt,.csv,.md,.json"
+                      onChange={(e) => {
+                         if (e.target.files) {
+                           setUserContextFiles(Array.from(e.target.files));
+                         }
+                      }}
+                      className="text-xs file:mr-4 file:py-1 file:px-3 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-indigo-500/20 file:text-indigo-400 hover:file:bg-indigo-500/30 cursor-pointer"
+                    />
+                  </div>
+                </div>
+
+                {/* Structured Position */}
+                <div className="space-y-3 p-3 rounded-lg bg-[#0a0a0a] border border-[#2a2b2f] flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-[10px] uppercase text-[#8E9299] font-bold">Posição Aberta (Estruturada)</label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={hasPosition} 
+                          onChange={(e) => setHasPosition(e.target.checked)}
+                          className="rounded border-indigo-500/50 text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 accent-indigo-500 cursor-pointer"
+                        />
+                        <span className="text-xs text-indigo-400">Ativar</span>
+                      </label>
+                    </div>
+
+                    <p className="text-[10px] text-[#8E9299] leading-tight mb-3">
+                      Ao ativar, a análise entrará em <strong className="text-white">Modo Posição</strong> para o <strong>Ticker Específico</strong> buscado no topo. O Gate Bottom Fishing e Risco:Retorno 1:2 serão ignorados para avaliar se vale a pena manter.
+                    </p>
+                    
+                    <div className={`grid grid-cols-2 gap-3 transition-opacity ${hasPosition ? 'opacity-100' : 'opacity-30 pointer-events-none'}`}>
+                      <div>
+                        <label className="text-[10px] uppercase text-[#8E9299] block mb-1">Quantidade</label>
+                        <input 
+                          type="number" 
+                          value={positionAmount}
+                          onChange={(e) => setPositionAmount(Number(e.target.value))}
+                          placeholder="Ex: 1000"
+                          className="w-full bg-[#151619] border border-[#2a2b2f] text-sm font-mono text-white p-1.5 rounded focus:outline-none focus:border-indigo-500/50"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase text-[#8E9299] block mb-1">Preço Médio (R$)</label>
+                        <input 
+                          type="number" 
+                          step="0.01"
+                          value={positionAvgPrice}
+                          onChange={(e) => setPositionAvgPrice(Number(e.target.value))}
+                          placeholder="Ex: 24.50"
+                          className="w-full bg-[#151619] border border-[#2a2b2f] text-sm font-mono text-white p-1.5 rounded focus:outline-none focus:border-indigo-500/50"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {hasPosition && !specificTicker.trim() && (
+                    <div className="flex items-center gap-1.5 p-1.5 rounded bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[10px] mt-2">
+                      <AlertCircle className="w-3 h-3 shrink-0" />
+                      <span>Você precisa definir um <strong>Ticker</strong> na barra de pesquisa no topo.</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Main Content */}
       {activeTab === 'HISTORICO' ? (

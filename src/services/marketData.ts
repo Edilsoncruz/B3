@@ -13,9 +13,12 @@ import { applyDeterministicFilters, applyRecoveryPreFilter, B3_FULL_CATALOG, DEF
 import { syncAssetsIncrementally, SyncProgressCallback, IncrementalSyncResult } from './incrementalSync';
 import { getFundamentals, getStockQuote, getStockStats } from './bolsai';
 import { AuditManager } from './auditManager';
+import { applyGateBatch, loadGateParams, GateResult } from './gateBottomFishing';
 
 export interface MarketCandidatesResult {
   candidates: StockCache[];
+  /** Resultados do Gate Bottom Fishing para candidatos aprovados (Modo Descoberta) */
+  gateResults?: Record<string, GateResult>;
   screenedResults?: ScreeningResult[];
   syncStats: {
     totalUniverseCount: number;
@@ -34,6 +37,17 @@ export interface MarketScanOptions {
   forceRefresh?: boolean;
   auditManager?: AuditManager;
   maxPrice?: number;
+  /**
+   * Dados de posição do usuário (Modo Posição).
+   * Se presentes (quantidade + preço médio), o Gate Bottom Fishing é bypassado
+   * e o R:R 1:2 não é obrigatório.
+   * Critério correto: presença estrutural de dados de posição — NÃO cardinalidade de tickers.
+   */
+  positionData?: {
+    ticker: string;
+    quantity: number;
+    averagePrice: number;
+  };
 }
 
 /**
@@ -206,9 +220,14 @@ export async function getMarketCandidates(
     console.log(`  [Preço Máximo] Corte R$ ${maxPriceLimit}: ${lunaInputTickers.length} candidatas restantes.`);
   }
 
+  // Determina o modo de análise:
+  // Modo Posição = dados estruturais de posição (quantidade + preço médio) presentes.
+  // Modo Descoberta = padrão (mais restritivo). Nunca inferir por cardinalidade de tickers.
+  const isModoPositicao = !!(opts.positionData?.quantity && opts.positionData?.averagePrice);
+
   if (opts.auditManager?.isEnabled()) {
     await opts.auditManager.logEvent('LAYER_1_5', 'RECOVERY_PREFILTER_APPLIED', 'ALL',
-      `Camada 1.5: ${eligibleTickers.length} elegíveis → ${preFilterStats.falling} em queda → ${preFilterStats.recovering} com recuperação → ${lunaInputTickers.length} candidatas para Luna${fallCandidates.length === 0 ? ' (fallback: mercado sem candidatas, enviando todos)' : ''}`,
+      `Camada 1.5: ${eligibleTickers.length} elegíveis → ${preFilterStats.falling} em queda → ${preFilterStats.recovering} com recuperação → ${lunaInputTickers.length} candidatas para Gate${fallCandidates.length === 0 ? ' (fallback: mercado sem candidatas, enviando todos)' : ''}`,
       0,
       {
         totalEligible: eligibleTickers.length,
@@ -230,9 +249,78 @@ export async function getMarketCandidates(
     );
   }
 
+  // =========================================================================
+  // Etapa D.5: GATE BOTTOM FISHING (determinístico, sem IA) — Modo Descoberta apenas
+  // Doc 3.2 §10 — roda DEPOIS dos Filtros Pré-IA e ANTES da Luna.
+  // Ativos REJEITADOS pelo Gate não chegam à Luna → zero custo de IA.
+  // =========================================================================
+  let gateResultsMap: Record<string, GateResult> = {};
+  let lunaInputAfterGate = lunaInputTickers;
+
+  if (!isModoPositicao) {
+    // Modo Descoberta: Gate obrigatório
+    const gateParams = loadGateParams();
+    const gateInputStocks = lunaInputTickers
+      .map(t => freshDataMap[t.toUpperCase()])
+      .filter((s): s is StockCache => !!s);
+
+    // Captura contagem antes do Gate para comparação before/after
+    const preGateCount = gateInputStocks.length;
+
+    const { passed, rejected, stats: gateStats } = applyGateBatch(gateInputStocks, gateParams);
+
+    // Mapeia resultados do Gate por ticker (para passar à Luna no contexto)
+    for (const { gateResult } of passed) {
+      gateResultsMap[gateResult.ticker] = gateResult;
+    }
+    for (const { gateResult } of rejected) {
+      gateResultsMap[gateResult.ticker] = gateResult;
+    }
+
+    lunaInputAfterGate = passed.map(p => p.stock.ticker);
+
+    // Relatório before/after solicitado pelo usuário para validação do Gate
+    console.log(`\n📊 [Gate — Comparação Before/After]`);
+    console.log(`   Antes do Gate:  ${preGateCount} ativos`);
+    console.log(`   Após Gate:      ${lunaInputAfterGate.length} ativos (${gateStats.rejeitados} rejeitados sem custo de IA)`);
+    console.log(`   CANDIDATO FORTE: ${gateStats.candidatosFortes}`);
+    console.log(`   CANDIDATO:       ${gateStats.candidatos}`);
+    if (gateStats.rejeitados > 0) {
+      const rejectedTickers = rejected.map(r => r.gateResult.ticker).slice(0, 20);
+      console.log(`   Rejeitados (amostra): ${rejectedTickers.join(', ')}${rejected.length > 20 ? '...' : ''}`);
+    }
+
+    if (opts.auditManager?.isEnabled()) {
+      await opts.auditManager.logEvent('GATE', 'GATE_APPLIED', 'ALL',
+        `Gate Bottom Fishing: ${preGateCount} entradas → ${lunaInputAfterGate.length} passaram (${gateStats.rejeitados} rejeitados sem custo de IA)`,
+        0,
+        {
+          params: gateParams,
+          stats: gateStats,
+          candidatosFortes: passed
+            .filter(p => p.gateResult.classification === 'CANDIDATO FORTE')
+            .map(p => ({ ticker: p.gateResult.ticker, drop: p.gateResult.gate_drop_pct, distance: p.gateResult.gate_distance_pct })),
+          rejeitados: rejected
+            .slice(0, 50)
+            .map(r => ({ ticker: r.gateResult.ticker, reasons: r.gateResult.reasons }))
+        }
+      );
+    }
+  } else {
+    // Modo Posição: Gate não se aplica (doc 3.2 §40)
+    console.log(`\n🔵 [Gate] Modo Posição detectado — Gate bypassado. R:R 1:2 não obrigatório.`);
+    if (opts.auditManager?.isEnabled()) {
+      await opts.auditManager.logEvent('GATE', 'GATE_BYPASSED', 'ALL',
+        'Gate Bottom Fishing bypassado — Modo Posição (dados de posição presentes)', 0,
+        { positionData: opts.positionData }
+      );
+    }
+  }
+
   // Etapa E: Camada 2 — Triagem Inteligente (Luna) com dados frescos
+  // Luna recebe apenas ativos aprovados pelo Gate (ou todos no Modo Posição)
   if (opts.onProgress) {
-    opts.onProgress({ current: 0, total: 100, message: `Triagem Inteligente (Luna): avaliando ${lunaInputTickers.length} candidatas QUEDA+RECUPERAÇÃO...` });
+    opts.onProgress({ current: 0, total: 100, message: `Triagem Inteligente (Luna): avaliando ${lunaInputAfterGate.length} candidatas aprovadas pelo Gate...` });
   }
 
   let selectedTickers: string[] = [];
@@ -240,7 +328,8 @@ export async function getMarketCandidates(
 
   try {
     const { triageMarket } = await import('./openai');
-    const triageResponse = await triageMarket(lunaInputTickers, freshDataMap);
+    // Passa gateResultsMap para que a Luna receba o contexto do Gate e não reduplique critérios
+    const triageResponse = await triageMarket(lunaInputAfterGate, freshDataMap, gateResultsMap, isModoPositicao);
 
     const ranking = triageResponse.ranking || [];
     const eligibleFromTriage = ranking.filter(r => r.elegivel_para_analise_profunda !== false);
@@ -272,13 +361,14 @@ export async function getMarketCandidates(
 
   return {
     candidates: finalCandidates,
+    gateResults: gateResultsMap,
     screenedResults,
     syncStats: {
       totalUniverseCount: B3_FULL_CATALOG.length,
       eligibleLayer1Count: eligibleTickers.length,
       fallingCount: preFilterStats.falling,
       recoveringCount: preFilterStats.recovering,
-      lunaInputCount: lunaInputTickers.length,
+      lunaInputCount: lunaInputAfterGate.length,
       selectedPoolSize: selectedTickers.length,
       cacheHitCount: preLunaSync.cacheHitCount,
       apiFetchCount: preLunaSync.apiFetchCount,

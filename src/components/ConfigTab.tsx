@@ -8,6 +8,7 @@ import {
   getAIConfig, saveAIConfig, testProviderConnection, validateAPIKeys,
   getActiveModel, AIConfig, LunaTerraProvider, SolProvider
 } from '../services/aiProvider';
+import { loadGateParams, saveGateParams, GateParams } from '../services/gateBottomFishing';
 
 interface TestStatus {
   openai?: 'idle' | 'testing' | 'ok' | 'error';
@@ -23,6 +24,7 @@ interface TestError {
 
 export function ConfigTab() {
   const [config, setConfig] = useState<AIConfig>(getAIConfig());
+  const [gateParams, setGateParams] = useState<GateParams>(loadGateParams());
   const [testStatus, setTestStatus] = useState<TestStatus>({});
   const [testErrors, setTestErrors] = useState<TestError>({});
   const [saved, setSaved] = useState(false);
@@ -43,6 +45,7 @@ export function ConfigTab() {
 
   const handleSave = () => {
     saveAIConfig(config);
+    saveGateParams(gateParams);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -239,6 +242,53 @@ export function ConfigTab() {
             </span>
           </div>
         )}
+      </SectionCard>
+
+      {/* Seção: Gate Bottom Fishing */}
+      <SectionCard title="Gate Bottom Fishing" subtitle="Parâmetros determinísticos (Filtro Pré-IA)" icon={<ShieldCheck size={18} color="#10b981" />}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+          
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <label style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 600 }}>Queda Mínima (%)</label>
+            <input 
+              type="number" 
+              value={gateParams.GATE_DROP_PERCENT}
+              onChange={e => setGateParams(prev => ({ ...prev, GATE_DROP_PERCENT: Number(e.target.value) }))}
+              style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(0,0,0,0.2)', color: 'white' }}
+            />
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <label style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 600 }}>Distância Mínima (%)</label>
+            <input 
+              type="number" 
+              value={gateParams.GATE_MIN_DISTANCE}
+              onChange={e => setGateParams(prev => ({ ...prev, GATE_MIN_DISTANCE: Number(e.target.value) }))}
+              style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(0,0,0,0.2)', color: 'white' }}
+            />
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <label style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 600 }}>Volume Min (R$)</label>
+            <input 
+              type="number" 
+              value={gateParams.GATE_MIN_VOLUME}
+              onChange={e => setGateParams(prev => ({ ...prev, GATE_MIN_VOLUME: Number(e.target.value) }))}
+              style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(0,0,0,0.2)', color: 'white' }}
+            />
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <label style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 600 }}>ATR Min (%)</label>
+            <input 
+              type="number" 
+              value={gateParams.GATE_MIN_ATR}
+              onChange={e => setGateParams(prev => ({ ...prev, GATE_MIN_ATR: Number(e.target.value) }))}
+              style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(0,0,0,0.2)', color: 'white' }}
+            />
+          </div>
+
+        </div>
       </SectionCard>
 
       {/* Botão Salvar */}

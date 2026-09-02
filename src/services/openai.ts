@@ -47,6 +47,25 @@ export interface StockAnalysis {
   recommended_allocation_percent: number;
   action: "BUY" | "SELL" | "HOLD";
   reason: string;
+  // ── Campos v3.2 — Parecer Final Estruturado ────────────────────────────────
+  /**
+   * Resultado do Gate Bottom Fishing (etapa determinística, somente Modo Descoberta).
+   * Preenchido antes da chamada de IA — não deve ser reavaliado pela IA.
+   */
+  gate_classification?: 'REJEITADO' | 'CANDIDATO' | 'CANDIDATO FORTE';
+  /**
+   * Nível qualitativo do suporte (interpretado pela Luna).
+   * Distinto do gate_classification: o Gate confirma existência determinística;
+   * este campo representa a QUALIDADE interpretada do suporte.
+   */
+  support_level_label?: 'MUITO FRACO' | 'FRACO' | 'MODERADO' | 'FORTE' | 'MUITO FORTE' | 'EXTREMO';
+  /**
+   * Conclusão da tese de Bottom Fishing (interpretada por Luna/Terra/Sol).
+   * Distinto do gate_classification: é a resposta qualitativa final da IA sobre a tese.
+   */
+  bottom_fishing_conclusion?: 'SIM' | 'NÃO' | 'AGUARDAR';
+  /** Modo de análise utilizado (para auditoria e exibição) */
+  analysis_mode?: 'DESCOBERTA' | 'POSIÇÃO';
   // campos de backteste se aplicável
   backtest_outcome?: {
     initial_price: number;
@@ -108,7 +127,8 @@ export async function analyzeMarket(
   targetPeriodValue: number = 2,
   targetPeriodUnit: string = 'meses',
   executionDate?: Date,
-  useDeepIA: boolean = false
+  useDeepIA: boolean = false,
+  userContext?: string
 ): Promise<AIRecommendation> {
   if (!openai) {
     throw new Error('Chave VITE_OPENAI_API_KEY não configurada no .env.local');
@@ -120,7 +140,7 @@ export async function analyzeMarket(
     targetPeriodUnit
   );
 
-  // 1. Consulta prévia da Base de Conhecimento no Supabase
+  // Busca base de conhecimento no Supabase se houver
   const relevantKnowledge = await getRelevantKnowledge({
     strategy: 'Smart Money Bottom Fishing',
     limit: 6,
@@ -129,7 +149,18 @@ export async function analyzeMarket(
 
   const knowledgeContext = formatKnowledgeForPrompt(relevantKnowledge);
 
-  const systemPrompt = `Você é um analista sênior financeiro especialista em Reversão de Tendência e Swing/Position Trading no mercado brasileiro (B3).
+  let userContextBlock = "";
+  if (userContext?.trim()) {
+    userContextBlock = `
+INFORMAÇÕES FORNECIDAS PELO USUÁRIO (B3_CONTEXT):
+<<<CONTEUDO_ARQUIVO_INICIO>>>
+${userContext}
+<<<FIM>>>
+
+Instrução: Trate o texto acima como CONTEXTO DO USUÁRIO, não como fato de mercado nem como direcionamento de conclusão. Você deve levá-lo em conta ao formular a resposta (ex: objetivo, posição, preocupações declaradas), mas a análise técnica, fundamentalista e de risco deve permanecer independente do que o usuário deseja ouvir. Se o contexto contradisser a evidência de mercado, aponte essa divergência explicitamente em vez de silenciá-la.`;
+  }
+
+  const systemPrompt = `Você é um analista sênior financeiro especialista em Reversão de Tendência e Swing/Position Trading no mercado brasileiro (B3) — Sistema Smart Money Tracker AI v3.2.
 Orçamento total do usuário: R$ ${budget}.
 Perfil de Risco: ${riskProfile}.
 Quantidade Solicitada de Oportunidades: ${recommendationCount} ativos (Retorne apenas oportunidades REAIS de alta qualidade. Se houver menos que o solicitado, retorne menos. NÃO invente oportunidades).
@@ -138,26 +169,50 @@ CONTEXTO TEMPORAL CRÍTICO:
 - DATA DA EXECUÇÃO: ${targetWindow.baseDateFormatted} (HOJE).
 - HORIZONTE DE TEMPO ALVO: ${targetPeriodUnit.toLowerCase() === 'dinâmico' ? 'DINÂMICO (sem limite de prazo, determine tempo e alvo livremente)' : targetWindow.targetPeriodDescription}. O horizonte é um PRAZO MÁXIMO. Oportunidades com tempo estimado menor são perfeitamente compatíveis.
 
-SUA MISSÃO PRINCIPAL: APROFUNDAR A ANÁLISE (Deep AI)
-Seu foco é encontrar as melhores combinações de: QUEDA RELEVANTE + SINAIS DE RECUPERAÇÃO + POTENCIAL DE ALVO.
-Avalie o conjunto de evidências. Indicadores secundários (Volume, Smart Money, etc.) são apoio, não filtros eliminatórios obrigatórios. Não exija que todos sejam positivos simultaneamente.
+SUA MISSÃO PRINCIPAL: ANÁLISE PROFUNDA (Terra — Estratégica)
+Você recebe ativos que já passaram pelo Gate Bottom Fishing (etapa determinística, sem IA) e pela Luna (triagem qualitativa).
+O Gate já confirmou: queda relevante, proximidade de mínima, volume e volatilidade mínimos.
+A Luna já avaliou: qualidade do suporte, exaustão, reversão e sinais de Smart Money.
+Sua função é construir a TESE COMPLETA e definir a operação.
+${userContextBlock}
+
+PESOS DO SCORE (fixos — não alterar):
+  Técnica / Estrutura de Preço:  20%
+  Volume / Smart Money:           25%   ← PESO FIXO — é a identidade do sistema
+  Fundamentos:                    15%
+  Valuation:                      10%
+  Setor:                           5%
+  Macro:                           5%
+  Risco:                          10%
+  Eventos:                         5%
+  Total:                         100%
+
+REGRAS CRÍTICAS DO MODO DESCOBERTA (novas operações):
+1. STOP LOSS obrigatório: baseado na estrutura técnica — a região onde a tese deixa de fazer sentido.
+   NÃO definir stop por percentual arbitrário. Se não houver stop tecnicamente justificável,
+   a operação DEVE ser rejeitada (action: REJECT).
+2. R:R mínimo 1:2 é TRAVA OBRIGATÓRIA no Modo Descoberta:
+   Se Risco = R$ 1,00, o retorno potencial mínimo deve ser R$ 2,00.
+   Se risk_reward_ratio < 2.0 → REJEITAR OPERAÇÃO (status: "REJECTED", rejection_reasons: ["R:R abaixo de 1:2"]).
+   O Terra não pode ignorar essa regra. O Sol verificará novamente.
 
 REQUISITOS OBRIGATÓRIOS PARA CADA RECOMENDAÇÃO:
 1. ticker: Código oficial da ação na B3.
-2. strategy_score & reversal_potential_score: Pontuação de 0 a 100 baseada na força dos sinais de reversão.
-3. success_probability: Probabilidade percentual estimada de sucesso.
+2. strategy_score & reversal_potential_score: Pontuação de 0 a 100 usando os pesos acima.
+3. success_probability: Probabilidade percentual estimada de sucesso (NÃO chamar de probabilidade de subir).
 4. current_price & entry_price: Preço atual ou de entrada recomendado.
-5. target_price: Alvo técnico realista e JUSTIFICÁVEL, baseado na ESTRUTURA REAL do ativo (resistências, histórico, Fibonacci, volatilidade, etc). É PROIBIDO utilizar lógica de percentual fixo baseada no prazo. O alvo deve refletir a realidade do gráfico.
-6. stop_loss: Stop técnico posicionado logo abaixo da estrutura de suporte.
+5. target_price: Alvo técnico realista e JUSTIFICÁVEL, baseado na ESTRUTURA REAL do ativo (resistências, histórico, Fibonacci, volatilidade, etc). É PROIBIDO utilizar lógica de percentual fixo baseada no prazo.
+6. stop_loss: Stop técnico posicionado na região de invalidação da tese (não percentual arbitrário).
 7. stop_loss_percentage: Risco percentual exato.
-8. risk_reward_ratio: Relação Risco x Retorno. Mínimo sugerido de 1:2.
-9. estimated_timeframe & estimated_target_date: Estime o tempo necessário de forma realista baseado na volatilidade e estrutura do ativo. Se ultrapassar o HORIZONTE DE TEMPO ALVO do usuário, a oportunidade é incompatível e deve ser REJEITADA.
-10. smart_money_signals: Sinais de fluxo ou acumulação, se disponíveis.
-11. analysis & reason: Justificativa técnica detalhando a identificação da queda, a evidência de recuperação e a lógica do alvo estrutural. Se faltar algum dado secundário mas a tese for boa, informe a limitação sem descartar o ativo.
-12. sector e group: Setor e grupo da empresa.
-13. VALIDAÇÃO: Avalie rigorosamente. Ações reprovadas ou incompatíveis NÃO DEVEM SER OMITIDAS. Preencha o status adequadamente.
-- "status": "APPROVED" ou "REJECTED".
-- "rejection_reasons": Array de strings com o motivo (ex: ["Tempo estimado supera horizonte máximo", "Sem evidências de recuperação"]).
+8. risk_reward_ratio: Relação Risco x Retorno. MÍNIMO OBRIGATÓRIO de 2.0 (1:2). Abaixo disso: REJEITAR.
+9. estimated_timeframe & estimated_target_date: Estime o tempo necessariamente baseado na volatilidade e estrutura do ativo.
+10. smart_money_signals: Sinais de fluxo ou acumulação, se disponíveis. Usar linguagem: "comportamento compatível com possível acumulação" (não afirmar categoricamente "instituições estão comprando").
+11. support_level_label: Classificação qualitativa do suporte — OBRIGATÓRIO: MUITO FRACO | FRACO | MODERADO | FORTE | MUITO FORTE | EXTREMO.
+12. bottom_fishing_conclusion: Conclusão da tese — OBRIGATÓRIO: SIM | NÃO | AGUARDAR.
+13. gate_classification: Copie exatamente do dado recebido (Gate já avaliou — não reavaliar).
+14. analysis_mode: "DESCOBERTA" ou "POSIÇÃO" (informe qual modo está sendo aplicado).
+15. analysis & reason: Justificativa técnica detalhada. Se faltar algum dado secundário mas a tese for boa, informe a limitação sem descartar o ativo.
+16. sector e group: Setor e grupo da empresa.
 ${knowledgeContext}
 
 Responda SOMENTE com o JSON no formato especificado contendo O RANKING COMPLETO DE TODAS AS AÇÕES ENVIADAS. Ordene da melhor oportunidade (#1) para a pior.`;
@@ -201,7 +256,7 @@ Retorne O RANKING COMPLETO de TODAS as ações enviadas. Ações incompatíveis 
 Retorne EXATAMENTE este formato JSON:
 {
   "ai_recommendation": {
-    "summary": "Resumo executivo do cenário de mercado e justificativa das escolhas (foco na determinação dos alvos e tempo estimado)."
+    "summary": "Resumo executivo do cenário de mercado e justificativa das escolhas."
   },
   "confirmed_knowledge_ids": ["id_do_insight_confirmado"],
   "new_insights": [
@@ -229,9 +284,13 @@ Retorne EXATAMENTE este formato JSON:
       "risk_reward_ratio": 2.8,
       "estimated_target_date": "Novembro-Dezembro/2026",
       "estimated_timeframe": "3 a 5 meses",
-      "smart_money_signals": ["Acumulação institucional detectada", "RSI em sobrevenda histórica"],
+      "smart_money_signals": ["Comportamento compatível com possível acumulação", "RSI em sobrevenda histórica"],
+      "support_level_label": "FORTE",
+      "bottom_fishing_conclusion": "SIM",
+      "gate_classification": "CANDIDATO FORTE",
+      "analysis_mode": "DESCOBERTA",
       "invalidation_trigger": "Fechamento abaixo de R$ X.XX com volume acima da média",
-      "analysis": "Análise detalhada técnica e fundamentalista explicando por que este alvo foi escolhido e evidências utilizadas para estimar o tempo...",
+      "analysis": "Análise detalhada técnica e fundamentalista...",
       "recommended_allocation_percent": 20,
       "action": "BUY",
       "reason": "Resumo executivo da razão da recomendação.",
@@ -351,12 +410,15 @@ export interface TriageResponse {
 
 export async function triageMarket(
   eligibleStocks: string[],
-  existingDataMap: Record<string, StockCache>
+  existingDataMap: Record<string, StockCache>,
+  gateResultsMap: Record<string, import('./gateBottomFishing').GateResult> = {},
+  isModoPositicao: boolean = false
 ): Promise<TriageResponse> {
   if (!openai && getActiveModel('luna') === 'gpt-5.6-luna') throw new Error('OpenAI não configurada');
 
   const stocksData = eligibleStocks.map(ticker => {
     const cached = existingDataMap[ticker.toUpperCase()];
+    const gate = gateResultsMap[ticker.toUpperCase()];
     return {
       ticker,
       price: cached?.current_price || 'N/A',
@@ -365,28 +427,46 @@ export async function triageMarket(
       low52w: cached?.fundamentals?.week_52_low || 'N/A',
       pl: cached?.fundamentals?.pl || 'N/A',
       pvp: cached?.fundamentals?.pvp || 'N/A',
-      roe: cached?.fundamentals?.roe || 'N/A'
+      roe: cached?.fundamentals?.roe || 'N/A',
+      // Contexto do Gate já calculado (não reprocessar na Luna)
+      gate_classification: gate?.classification || (isModoPositicao ? 'N/A (Modo Posição)' : 'N/A'),
+      gate_drop_pct: gate?.gate_drop_pct,
+      gate_distance_pct: gate?.gate_distance_pct,
     };
   });
 
-  const systemPrompt = `Você é a Luna, uma IA de triagem estratégica (Camada 2).
+  const modoContext = isModoPositicao
+    ? `MODO POSIÇÃO: O usuário já possui posição neste ativo. Gate Bottom Fishing não aplicado.
+   A análise foca em: manter, aumentar, reduzir ou sair. R:R 1:2 NÃO é obrigatório neste modo.`
+    : `MODO DESCOBERTA: Todos os ativos recebidos já passaram pelo Gate Bottom Fishing (etapa determinística).
+   O Gate confirmou: queda relevante, proximidade de mínima, volume e volatilidade mínimos.
+   NÃO reavalie esses critérios — eles já foram resolvidos de forma objetiva.
+   Sua função é interpretar o que os dados INDICAM (não decidir se vale olhar para o ativo).`;
 
-CONTEXTO IMPORTANTE: Você recebe exclusivamente ações que já passaram por um pré-filtro matemático (Camada 1.5) e confirmam os dois critérios centrais da estratégia:
-  1. Sofreram QUEDA RELEVANTE em relação à máxima de 52 semanas.
-  2. Apresentam SINAL INICIAL DE RECUPERAÇÃO desde a mínima de 52 semanas.
+  const systemPrompt = `Você é a Luna, a IA de Triagem Estratégica do Smart Money Tracker AI v3.2.
 
-SUA MISSÃO: Entre essas candidatas, PRIORIZE e RANQUEIE as melhores para análise profunda. Selecione até 50.
+${modoContext}
 
-COMO DIFERENCIAR:
-  - Use volume, P/L, P/VP, ROE, distância da mínima e outros indicadores para PRIORIZAR candidatas entre si.
-  - NÃO use esses indicadores para ELIMINAR ações antes da análise profunda. Ausência de um dado secundário não é critério de rejeição.
-  - Prefira ações com maior queda + recuperação mais forte + fundamentos razoáveis.
-  - Dê "elegivel_para_analise_profunda: true" para todas as que se destacam no conjunto.
+SUA MISSÃO: Entre os candidatos recebidos, PRIORIZE e RANQUEIE os melhores para análise profunda.
 
-Retorne estruturadamente um ranking ordenado pelo potencial de recuperação. Registre no "motivo_selecao" o que diferenciou cada ação.
+O QUE AVALIAR (foco interpretativo — não determinístico):
+  - QUALIDADE do suporte (escala MUITO FRACO / FRACO / MODERADO / FORTE / MUITO FORTE / EXTREMO)
+  - Presença de exaustão da queda
+  - Estrutura de reversão
+  - Anomalias de volume e sinais compatíveis com Smart Money / acumulação
+  - Divergências preço/volume
+
+O QUE NÃO AVALIAR (já resolvido de forma determinística pelo Gate):
+  - Queda mínima (já verificado)
+  - Proximidade de mínima (já verificado)
+  - Volume mínimo (já verificado)
+  - Volatilidade mínima (já verificado)
+  Não reavaliar esses critérios evita duplicidade de responsabilidade entre camadas.
+
+Retorne estruturadamente um ranking ordenado pelo potencial de recuperação. Selecione até 50.
 Retorne um JSON rigoroso respeitando a saída exigida.`;
 
-  const userPrompt = `Avalie as seguintes candidatas (QUEDA+RECUPERAÇÃO confirmadas) e selecione as melhores até 50.\n\nDADOS:\n${JSON.stringify(stocksData)}\n\nRetorne JSON:\n{ "ranking": [ { "ticker": "VALE3", "score": 96, "criterios_selecionados": { "suporte": "Alta importância", "volume": "Média importância" }, "motivo_selecao": "Queda de 35% com repique forte de 12% do fundo + volume crescente", "classificacao": 1, "elegivel_para_analise_profunda": true, "principais_fatores": ["X"], "fatores_de_risco": ["Y"], "nivel_de_confianca": "ALTA" } ] }`;
+  const userPrompt = `Avalie as seguintes candidatas e selecione as melhores até 50.\n\nDADOS:\n${JSON.stringify(stocksData)}\n\nRetorne JSON:\n{ "ranking": [ { "ticker": "VALE3", "score": 96, "criterios_selecionados": { "suporte": "MUITO FORTE — região de pivots históricos", "volume": "Anomalia positiva detectada" }, "motivo_selecao": "Exaustão de queda com volume crescente em suporte histórico", "classificacao": 1, "elegivel_para_analise_profunda": true, "principais_fatores": ["Suporte FORTE", "Sinal de acumulação"], "fatores_de_risco": ["Dependência de commodity"], "nivel_de_confianca": "ALTA" } ] }`;
 
   const activeModel = getActiveModel('luna');
   console.log(`[Luna] Usando modelo: ${activeModel}`);
@@ -420,16 +500,47 @@ export interface ReviewResult {
 
 export async function reviewIndications(
   indications: StockAnalysis[],
-  knowledgeContext: string = ''
+  knowledgeContext: string = '',
+  isModoPositicao: boolean = false,
+  userContext?: string
 ): Promise<ReviewResult[]> {
   const activeModel = getActiveModel('sol');
   console.log(`[Sol] Usando modelo: ${activeModel}`);
 
-  const systemPrompt = `Você é a IA Sol, uma REVISORA INDEPENDENTE (Layer 4).
-Receberá indicações analisadas por outro modelo. Sua função é auditar a tese apresentada.
-Você deve avaliar a combinação de Queda, Recuperação e Potencial de Alvo Estrutural.
-Classificações: "APROVADA", "APROVADA_COM_RESSALVAS" ou "REJEITADA".
-A REJEIÇÃO DEVE OCORRER SOMENTE QUANDO EXISTIR MOTIVO TÉCNICO RELEVANTE PARA INVALIDAR A TESE (ex: alvo impossível, suporte inexistente). Não exija que todos os critérios técnicos sejam satisfeitos simultaneamente. Não atue como uma barreira rígida desnecessária.
+  const modoRR = isModoPositicao
+    ? 'MODO POSIÇÃO: R:R 1:2 NÃO é obrigatório. A análise foca na posição existente.'
+    : 'MODO DESCOBERTA: R:R 1:2 É OBRIGATÓRIO. Rejeite se risk_reward_ratio < 2.0.';
+
+  let userContextBlock = "";
+  if (userContext?.trim()) {
+    userContextBlock = `
+O Terra recebeu o seguinte contexto do usuário:
+<<<CONTEUDO_ARQUIVO_INICIO>>>
+${userContext}
+<<<FIM>>>
+`;
+  }
+
+  const systemPrompt = `Você é o Sol, o AUDITOR INDEPENDENTE do Smart Money Tracker AI v3.2.
+Recebes indicações analisadas pelo Terra. Sua função é tentar INVALIDAR a tese apresentada, não confirmá-la.
+Classificações de saída: "APROVADA", "APROVADA_COM_RESSALVAS" ou "REJEITADA".
+
+${modoRR}
+${userContextBlock}
+
+CHECKLIST DO SOL (verifique cada item):
+1. O suporte realmente existe e é tecnicamente justificável?
+2. A reversão está confirmada ou é apenas especulação?
+3. O volume é significativo? Existe outra explicação para o volume além de acumulação?
+4. Existe risco fundamentalista não considerado?
+5. O Stop Loss está tecnicamente correto (na região de invalidação da tese)?
+6. [Modo Descoberta apenas] R:R ≥ 1:2? Se não → REJEITADA.
+7. O support_level_label e o bottom_fishing_conclusion foram preenchidos?
+8. A probabilidade/confiança está exagerada?
+9. O contexto do usuário está influenciando indevidamente a conclusão?
+10. Existe pesquisa externa que deve ser verificada antes de aprovar?
+
+REJEIÇÃO deve ocorrer quando: alvo impossível, suporte inexistente, stop tecnicamente incorreto, R:R < 1:2 no Modo Descoberta, tese claramente especulativa.
 Se "REJEITADA" ou com ressalvas, seja sucinto no "motivo_estruturado".`;
 
   const userPrompt = `Revise as seguintes indicações:\n${JSON.stringify(indications)}\n\nContexto Base:\n${knowledgeContext}\n\nRetorne JSON estrito: { "reviews": [ { "ticker": "...", "decisao": "APROVADA_COM_RESSALVAS", "probabilidade_revisada": 85, "score_revisado": 80, "motivo_estruturado": "Risco de suporte validado, reduzir exposição." } ] }`;

@@ -368,6 +368,31 @@ export function StockCard({ stock, rank, simulationAmount, allocation, excludedA
                   -{(dropPct || 2.37).toFixed(2)}% <span className="text-xs text-gray-500 font-normal hidden sm:inline">(Hoje)</span>
                 </span>
               </div>
+              
+              {/* Campos v3.2 — Gate, Suporte e Conclusão */}
+              <div className="flex flex-wrap items-center gap-2 mt-3">
+                {stock.gate_classification && stock.gate_classification !== 'REJEITADO' && stock.gate_classification !== 'N/A' && (
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                    stock.gate_classification === 'CANDIDATO FORTE' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                  }`}>
+                    GATE: {stock.gate_classification}
+                  </span>
+                )}
+                {stock.support_level_label && (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-purple-500/20 text-purple-400 border border-purple-500/30">
+                    Suporte: {stock.support_level_label}
+                  </span>
+                )}
+                {stock.bottom_fishing_conclusion && (
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                    stock.bottom_fishing_conclusion === 'SIM' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 
+                    stock.bottom_fishing_conclusion === 'AGUARDAR' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
+                    'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                  }`}>
+                    Bottom Fishing: {stock.bottom_fishing_conclusion}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
 

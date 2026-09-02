@@ -1,9 +1,20 @@
 /**
- * Etapas 1 & 2: Universo Inicial & Seleção Inteligente de Ativos
- * 
- * Responsável por mapear o universo completo da B3 e aplicar critérios dinâmicos
- * e parametrizáveis para selecionar o pool de ações monitoradas (ex: Top 50),
- * evitando downloads pesados de histórico para ativos irrelevantes.
+ * Etapas 1 & 2: Universo Inicial & Seleção Inteligente de Ativos — Smart Money Tracker AI v3.2
+ *
+ * FILTROS PRÉ-IA (Camada 1) — 100% determinísticos, sem chamada de IA.
+ * Eliminam rapidamente ativos claramente inadequados antes de qualquer processamento.
+ *
+ * Critérios (doc 3.2, seção 65-68):
+ *   - Preço mínimo (Anti-Mico): ≥ R$ 5,00
+ *   - Liquidez: Volume Financeiro Médio (preço × avg_volume_52w) ≥ R$ 20.000.000
+ *   - Todos os parâmetros são configuráveis
+ *
+ * Nota sobre o filtro de liquidez:
+ *   O campo avg_volume_52w representa quantidade média de ações negociadas.
+ *   Para obter volume financeiro: preço_atual × avg_volume_52w.
+ *   O threshold de R$ 20M é aplicado sobre esse produto.
+ *   Uma ação de R$ 3 negociando 150k ações/dia = R$ 450k/dia — muito abaixo do piso.
+ *   Uma ação de R$ 50 negociando 500k ações/dia = R$ 25M/dia — acima do piso. ✓
  */
 
 import { StockCache } from '../lib/supabase';
@@ -134,15 +145,34 @@ export async function applyDeterministicFilters(
       continue;
     }
 
-    // Regra 2: Preço mínimo (evitar penny stocks extremas)
-    if (cached.current_price > 0 && cached.current_price < 1.0) {
-      eliminatedDetails.push({ ticker, eliminated: true, reason: 'Penny stock (Preço < 1.00)' });
+    // Regra 2: Preço mínimo Anti-Mico (doc 3.2 §65.1 — referência inicial R$ 5,00)
+    // Reduz ativos excessivamente baratos que geralmente indicam alta especulação ou
+    // deterioração estrutural da empresa.
+    const MIN_PRICE = 5.0;
+    if (cached.current_price > 0 && cached.current_price < MIN_PRICE) {
+      eliminatedDetails.push({ ticker, eliminated: true, reason: `Anti-Mico: preço R$ ${cached.current_price.toFixed(2)} < R$ ${MIN_PRICE.toFixed(2)}` });
       continue;
     }
 
-    // Regra 3: Liquidez Mínima (se disponível)
-    if (cached.fundamentals?.avg_volume_52w !== undefined && cached.fundamentals.avg_volume_52w < 150000) {
-      eliminatedDetails.push({ ticker, eliminated: true, reason: 'Baixa liquidez (Volume médio < 150k)' });
+    // Regra 3: Liquidez Mínima — Volume Financeiro Médio ≥ R$ 20.000.000 (doc 3.2 §66)
+    // Calcula volume financeiro como: preço_atual × avg_volume_52w (qtd de ações)
+    // IMPORTANTE: avg_volume_52w está em quantidade de ações, não em R$.
+    // Uma ação de R$ 3 negociando 150k ações/dia = R$ 450k/dia → REJEITADA corretamente.
+    // Uma ação de R$ 200 negociando 150k ações/dia = R$ 30M/dia → APROVADA corretamente.
+    const MIN_VOLUME_FINANCIAL = 20_000_000; // R$ 20 milhões
+    if (cached.fundamentals?.avg_volume_52w !== undefined && cached.current_price > 0) {
+      const volumeFinancial = cached.fundamentals.avg_volume_52w * cached.current_price;
+      if (volumeFinancial < MIN_VOLUME_FINANCIAL) {
+        eliminatedDetails.push({
+          ticker,
+          eliminated: true,
+          reason: `Liquidez insuficiente: vol. financeiro R$ ${(volumeFinancial / 1_000_000).toFixed(1)}M < R$ ${(MIN_VOLUME_FINANCIAL / 1_000_000).toFixed(0)}M`
+        });
+        continue;
+      }
+    } else if (cached.fundamentals?.avg_volume_52w !== undefined && cached.fundamentals.avg_volume_52w < 1000) {
+      // Fallback: sem preço disponível mas volume extremamente baixo (< 1000 ações/dia)
+      eliminatedDetails.push({ ticker, eliminated: true, reason: 'Liquidez insuficiente (volume extremamente baixo)' });
       continue;
     }
 
