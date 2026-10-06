@@ -14,24 +14,58 @@ interface Props {
 interface State {
   hasError: boolean;
   error: Error | null;
+  autoRecoveries: number;
+}
+
+/** Número máximo de remontagens automáticas antes de exibir a tela de erro. */
+const MAX_AUTO_RECOVERIES = 2;
+
+/**
+ * Erros de DOM disparados pelo React quando algo FORA dele alterou a árvore
+ * (tradutor automático do navegador, extensões de tradução, manipulação manual).
+ * São transitórios: remontar a árvore faz o React reconstruir as referências.
+ */
+function isTransientDomError(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === "NotFoundError") return true;
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /insertBefore|removeChild|appendChild|replaceChild|not a child of this node|NotFoundError/i.test(message);
 }
 
 class ErrorBoundary extends Component<Props, State> {
   public state: State = {
     hasError: false,
-    error: null
+    error: null,
+    autoRecoveries: 0
   };
 
-  public static getDerivedStateFromError(error: Error): State {
+  public static getDerivedStateFromError(error: Error): Partial<State> {
     return { hasError: true, error };
   }
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error("Uncaught error:", error, errorInfo);
+
+    // Falha de reconciliação de DOM não deve derrubar a aplicação inteira:
+    // reagenda uma remontagem limpa em vez de exigir reload manual.
+    if (isTransientDomError(error) && this.state.autoRecoveries < MAX_AUTO_RECOVERIES) {
+      setTimeout(() => {
+        this.setState(prev => ({
+          hasError: false,
+          error: null,
+          autoRecoveries: prev.autoRecoveries + 1
+        }));
+      }, 60);
+    }
   }
+
+  private handleRetry = () => {
+    this.setState({ hasError: false, error: null });
+  };
 
   public render() {
     if (this.state.hasError) {
+      const isDomError = isTransientDomError(this.state.error);
+
       return (
         <div className="min-h-screen bg-[#050505] text-white flex flex-col items-center justify-center p-6 text-center">
           <div className="p-4 rounded-2xl bg-red-500/10 border border-red-500/20 max-w-lg space-y-4">
@@ -43,16 +77,28 @@ class ErrorBoundary extends Component<Props, State> {
               <p className="text-xs text-red-300/80 font-mono">
                 {this.state.error?.message || "Erro desconhecido na renderização."}
               </p>
+              {isDomError && (
+                <p className="text-[11px] text-amber-300/80 mt-3 leading-relaxed">
+                  Este erro é típico de tradução automática da página (Google Translate / extensões)
+                  ou de alguma extensão do navegador que altera o DOM. Desative a tradução desta
+                  página (ou use uma janela anônima) e tente novamente.
+                </p>
+              )}
             </div>
-            <button
-              onClick={() => {
-                this.setState({ hasError: false, error: null });
-                window.location.reload();
-              }}
-              className="px-4 py-2 rounded-lg bg-white text-black font-bold text-xs flex items-center gap-2 mx-auto hover:bg-gray-200 cursor-pointer shadow"
-            >
-              <RefreshCw className="w-4 h-4" /> Recarregar Aplicação
-            </button>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <button
+                onClick={this.handleRetry}
+                className="px-4 py-2 rounded-lg bg-emerald-500 text-black font-bold text-xs flex items-center gap-2 hover:bg-emerald-400 cursor-pointer shadow"
+              >
+                <RefreshCw className="w-4 h-4" /> Tentar Novamente
+              </button>
+              <button
+                onClick={() => window.location.reload()}
+                className="px-4 py-2 rounded-lg bg-white text-black font-bold text-xs flex items-center gap-2 hover:bg-gray-200 cursor-pointer shadow"
+              >
+                <RefreshCw className="w-4 h-4" /> Recarregar Aplicação
+              </button>
+            </div>
           </div>
         </div>
       );

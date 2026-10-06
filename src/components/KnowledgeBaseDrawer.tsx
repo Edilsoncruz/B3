@@ -172,7 +172,7 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_base_confidence ON public.knowledge_bas
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-50 overflow-hidden flex justify-end">
+        <div key="kb-drawer" className="fixed inset-0 z-50 overflow-hidden flex justify-end">
           {/* Backdrop */}
           <motion.div 
             initial={{ opacity: 0 }}
@@ -325,6 +325,7 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_base_confidence ON public.knowledge_bas
             <AnimatePresence>
               {showAddForm && (
                 <motion.form 
+                  key="kb-add-form"
                   initial={{ height: 0, opacity: 0 }}
                   animate={{ height: "auto", opacity: 1 }}
                   exit={{ height: 0, opacity: 0 }}

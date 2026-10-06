@@ -630,6 +630,7 @@ export function Dashboard() {
       <AnimatePresence>
         {activeTab === 'ANALISE' && showFilters && (
           <motion.div 
+            key="filters-bar"
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
@@ -782,6 +783,7 @@ export function Dashboard() {
       <AnimatePresence>
         {activeTab === 'ANALISE' && showContextBar && (
           <motion.div 
+            key="context-bar"
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}

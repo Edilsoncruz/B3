@@ -489,6 +489,7 @@ export function AnalysisAssistant({ stock, analysisDate }: AnalysisAssistantProp
           <AnimatePresence>
             {showSuggestions && messages.length === 0 && (
               <motion.div
+                key="suggestions-empty"
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}
@@ -550,6 +551,7 @@ export function AnalysisAssistant({ stock, analysisDate }: AnalysisAssistantProp
           <AnimatePresence>
             {showSuggestions && messages.length > 0 && (
               <motion.div
+                key="suggestions-history"
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}
@@ -611,6 +613,7 @@ export function AnalysisAssistant({ stock, analysisDate }: AnalysisAssistantProp
           <AnimatePresence>
             {showReanalysisModal && (
               <ReanalysisModal
+                key="reanalysis-modal"
                 onConfirm={handleReanalysis}
                 onCancel={() => setShowReanalysisModal(false)}
               />

@@ -1,13 +1,23 @@
 <!doctype html>
-<html lang="en">
+<html lang="pt-BR" translate="no">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>My Google AI Studio App</title>
+    <!--
+      NOTE: o idioma declarado PRECISA bater com o idioma real do conteúdo (pt-BR).
+      Enquanto estava como lang="en", o Chrome/Edge consideravam a página "inglesa" e
+      aplicavam tradução automática (especialmente com a opção "sempre traduzir inglês"
+      ativada). O tradutor reescreve a árvore DOM embrulhando nós de texto em <font>,
+      o que invalida as referências internas do React e faz o render quebrar com:
+      "Failed to execute 'insertBefore' on 'Node': The node before which the new node
+      is to be inserted is not a child of this node."
+      O par (lang correto + notranslate) impede esse cenário.
+    -->
+    <meta name="google" content="notranslate" />
+    <title>SmartMoney Tracker AI — Análise de Ações B3</title>
   </head>
-  <body>
+  <body class="notranslate">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-
